@@ -1,8 +1,8 @@
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use plottypus_core::{
-    Config, History, PROC_RATIO_DEFAULT, PROC_RATIO_MAX, PROC_RATIO_MIN, Result, Snapshot, Surface,
-    auto_surface,
+    Config, History, PROC_RATIO_MAX, PROC_RATIO_MIN, Result, Snapshot, Surface, auto_surface,
 };
 use plottypus_metrics::{Sampler, Signal, send_signal};
 use plottypus_ui::{
@@ -16,27 +16,49 @@ use crate::tui::{self, AppTerminal};
 pub fn run() -> Result<()> {
     tui::install_panic_hook();
     let mut terminal = tui::install()?;
-    let result = run_inner(&mut terminal);
-    result.and(tui::restore())
-}
-
-fn run_inner(terminal: &mut AppTerminal) -> Result<()> {
-    let mut app = App::new()?;
-    loop {
-        terminal.draw(|frame| app.draw(frame))?;
-        let timeout = app.poll_timeout();
-        match event::poll(timeout, app.searching, app.settings, app.expanded.is_some())? {
-            Some(Event::Quit) => break,
-            Some(ev) => {
-                if !matches!(ev, Event::Tick) {
-                    app.on_tick()?;
-                }
-                app.handle(ev)?;
-            }
-            None => {}
-        }
+    let (result, warning) = run_inner(&mut terminal);
+    result.and(tui::restore())?;
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
     }
     Ok(())
+}
+
+fn prefs_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    Some(base.join("plottypus").join("config.toml"))
+}
+
+fn run_inner(terminal: &mut AppTerminal) -> (Result<()>, Option<String>) {
+    let mut app = match App::new() {
+        Ok(app) => app,
+        Err(err) => return (Err(err), None),
+    };
+    loop {
+        if let Err(err) = terminal.draw(|frame| app.draw(frame)) {
+            return (Err(plottypus_core::Error::terminal(err.to_string())), None);
+        }
+        let timeout = app.poll_timeout();
+        match event::poll(timeout, app.searching, app.settings, app.expanded.is_some()) {
+            Ok(Some(Event::Quit)) => break,
+            Ok(Some(ev)) => {
+                if !matches!(ev, Event::Tick)
+                    && let Err(err) = app.on_tick()
+                {
+                    return (Err(err), None);
+                }
+                if let Err(err) = app.handle(ev) {
+                    return (Err(err), None);
+                }
+            }
+            Ok(None) => {}
+            Err(err) => return (Err(err), None),
+        }
+    }
+    (Ok(()), app.save_prefs())
 }
 
 struct App {
@@ -68,6 +90,7 @@ struct App {
     ready: bool,
     last_tick: Instant,
     status: Option<(String, Instant)>,
+    dirty_prefs: bool,
     last_area: ratatui::layout::Rect,
     proc_ratio: u16,
     dragging_split: bool,
@@ -75,10 +98,12 @@ struct App {
 
 impl App {
     fn new() -> Result<Self> {
+        let config = prefs_path().map_or_else(Config::default, |path| Config::load(&path));
+        let proc_ratio = config.proc_ratio;
         let mut sampler = Sampler::new()?;
         let snapshot = sampler.tick()?;
         Ok(Self {
-            config: Config::default(),
+            config,
             sampler,
             snapshot,
             cpu_history: History::default(),
@@ -106,10 +131,26 @@ impl App {
             ready: false,
             last_tick: Instant::now(),
             status: None,
+            dirty_prefs: false,
             last_area: ratatui::layout::Rect::new(0, 0, 80, 24),
-            proc_ratio: PROC_RATIO_DEFAULT,
+            proc_ratio,
             dragging_split: false,
         })
+    }
+
+    fn touch(&mut self) {
+        self.dirty_prefs = true;
+    }
+
+    fn save_prefs(&self) -> Option<String> {
+        if !self.dirty_prefs {
+            return None;
+        }
+        let path = prefs_path()?;
+        match self.config.save(&path) {
+            Ok(()) => None,
+            Err(err) => Some(format!("could not save settings: {err}")),
+        }
     }
 
     fn poll_timeout(&self) -> Duration {
@@ -262,15 +303,39 @@ impl App {
                     self.arm_kill();
                 }
             }
-            Event::CycleInterval => self.config.interval = self.config.cycle_interval(),
+            Event::CycleInterval => {
+                self.config.interval = self.config.cycle_interval();
+                self.touch();
+            }
             Event::Freeze => self.frozen = !self.frozen,
-            Event::ToggleGpu => self.config.show_gpu = !self.config.show_gpu,
-            Event::ToggleNet => self.config.show_net = !self.config.show_net,
-            Event::ToggleCores => self.config.show_cores = !self.config.show_cores,
-            Event::ToggleDisk => self.config.show_disk = !self.config.show_disk,
-            Event::ToggleFans => self.config.show_fans = !self.config.show_fans,
-            Event::ToggleThreads => self.config.show_threads = !self.config.show_threads,
-            Event::CycleSort => self.config.proc_sort = self.config.proc_sort.next(),
+            Event::ToggleGpu => {
+                self.config.show_gpu = !self.config.show_gpu;
+                self.touch();
+            }
+            Event::ToggleNet => {
+                self.config.show_net = !self.config.show_net;
+                self.touch();
+            }
+            Event::ToggleCores => {
+                self.config.show_cores = !self.config.show_cores;
+                self.touch();
+            }
+            Event::ToggleDisk => {
+                self.config.show_disk = !self.config.show_disk;
+                self.touch();
+            }
+            Event::ToggleFans => {
+                self.config.show_fans = !self.config.show_fans;
+                self.touch();
+            }
+            Event::ToggleThreads => {
+                self.config.show_threads = !self.config.show_threads;
+                self.touch();
+            }
+            Event::CycleSort => {
+                self.config.proc_sort = self.config.proc_sort.next();
+                self.touch();
+            }
             Event::Click { col, row } => self.on_click(col, row),
             Event::Drag { col, .. } => self.drag_split(col),
             Event::MouseUp => self.dragging_split = false,
@@ -286,6 +351,7 @@ impl App {
         let ratio =
             u16::try_from(u32::from(proc_w) * 100 / u32::from(self.last_area.width)).unwrap_or(34);
         self.proc_ratio = ratio.clamp(PROC_RATIO_MIN, PROC_RATIO_MAX);
+        self.touch();
     }
 
     fn handle_move(&mut self, delta: i32) {
@@ -301,14 +367,38 @@ impl App {
     fn handle_settings(&mut self, event: Event) {
         match event {
             Event::Settings => self.settings = false,
-            Event::CycleInterval => self.config.interval = self.config.cycle_interval(),
-            Event::ToggleGpu => self.config.show_gpu = !self.config.show_gpu,
-            Event::ToggleNet => self.config.show_net = !self.config.show_net,
-            Event::ToggleCores => self.config.show_cores = !self.config.show_cores,
-            Event::ToggleDisk => self.config.show_disk = !self.config.show_disk,
-            Event::ToggleFans => self.config.show_fans = !self.config.show_fans,
-            Event::ToggleThreads => self.config.show_threads = !self.config.show_threads,
-            Event::CycleSort => self.config.proc_sort = self.config.proc_sort.next(),
+            Event::CycleInterval => {
+                self.config.interval = self.config.cycle_interval();
+                self.touch();
+            }
+            Event::ToggleGpu => {
+                self.config.show_gpu = !self.config.show_gpu;
+                self.touch();
+            }
+            Event::ToggleNet => {
+                self.config.show_net = !self.config.show_net;
+                self.touch();
+            }
+            Event::ToggleCores => {
+                self.config.show_cores = !self.config.show_cores;
+                self.touch();
+            }
+            Event::ToggleDisk => {
+                self.config.show_disk = !self.config.show_disk;
+                self.touch();
+            }
+            Event::ToggleFans => {
+                self.config.show_fans = !self.config.show_fans;
+                self.touch();
+            }
+            Event::ToggleThreads => {
+                self.config.show_threads = !self.config.show_threads;
+                self.touch();
+            }
+            Event::CycleSort => {
+                self.config.proc_sort = self.config.proc_sort.next();
+                self.touch();
+            }
             _ => {}
         }
     }
@@ -459,6 +549,9 @@ impl App {
     }
 
     fn lock_surface(&mut self, surface: Surface) {
+        if self.config.surface != Some(surface) {
+            self.touch();
+        }
         self.config.surface = Some(surface);
         self.surface = surface;
     }
