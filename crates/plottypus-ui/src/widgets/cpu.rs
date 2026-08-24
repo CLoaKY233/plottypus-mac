@@ -6,7 +6,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chrome::{Axis, panel_block, render_scaled_graph};
+use crate::chrome::{Axis, panel_block, render_fill_bar, render_scaled_graph};
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -240,21 +240,32 @@ fn render_zone_card(
         return;
     }
     let show_cores = view.show_cores && !zone.cores.is_empty();
-    let show_graph = zone.history.is_some() && area.height >= 5;
+    let show_bar = area.width >= 8 && area.height >= 2;
+    let show_graph = zone.history.is_some() && area.height >= 6;
     let mut parts = vec![Constraint::Length(1)];
+    if show_bar {
+        parts.push(Constraint::Length(1));
+    }
     if show_graph {
         parts.push(Constraint::Fill(1));
     }
     if show_cores {
-        parts.push(Constraint::Fill(1));
+        parts.push(Constraint::Fill(2));
     }
     let rows = Layout::vertical(parts).split(area);
     frame.render_widget(Paragraph::new(zone_title(zone, theme)), rows[0]);
     let mut i = 1;
-    if show_graph && let Some(history) = zone.history {
+    if show_bar && let Some(bar) = rows.get(i) {
+        render_fill_bar(frame, *bar, zone.load, theme.cpu);
+        i += 1;
+    }
+    if show_graph
+        && let Some(history) = zone.history
+        && let Some(plot) = rows.get(i)
+    {
         render_scaled_graph(
             frame,
-            rows[i],
+            *plot,
             history,
             theme.temp,
             theme,
@@ -359,7 +370,7 @@ fn core_spans(core: &CoreSample, width: usize, solo: bool, theme: &Theme) -> Vec
     let pct = format!(" {:>4}", percent_display(core.active));
     let meter_w = width.saturating_sub(label.chars().count() + pct.chars().count());
     let mut spans = vec![Span::styled(label, theme.dim())];
-    if meter_w >= 4 {
+    if meter_w >= 2 {
         spans.push(Span::styled(meter(core.active, meter_w), theme.cpu()));
     }
     spans.push(Span::styled(pct, theme.title()));
@@ -467,6 +478,7 @@ fn line_has_text(line: &Line<'_>) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::layout::Panel;
@@ -611,5 +623,51 @@ mod tests {
         assert!(text.contains("C0"), "{text}");
         assert!(!text.contains("P0"), "{text}");
         assert!(!text.contains('°'), "{text}");
+    }
+
+    #[test]
+    fn expanded_paints_zone_bars() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        fx.snap.cpu.active = 0.4;
+        fx.snap.cpu.cores = vec![
+            CoreSample {
+                kind: ClusterKind::Performance,
+                index: 0,
+                scaled: 0.8,
+                active: 0.8,
+            },
+            CoreSample {
+                kind: ClusterKind::Super,
+                index: 0,
+                scaled: 0.3,
+                active: 0.3,
+            },
+        ];
+        fx.snap.sensors.p_c = Some(48.0);
+        fx.snap.sensors.s_c = Some(52.0);
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render(frame, frame.area(), &fx.view(), &Theme::default()))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                text.push_str(buf[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+        assert!(text.contains("performance"), "{text}");
+        assert!(text.contains("super"), "{text}");
+        assert!(text.contains("48°"), "{text}");
+        assert!(text.contains("52°"), "{text}");
+        assert!(text.contains('━') || text.contains('█'), "{text}");
+        assert!(text.contains("P0"), "{text}");
+        assert!(text.contains("S0"), "{text}");
     }
 }

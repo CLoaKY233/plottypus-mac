@@ -48,23 +48,27 @@ pub fn render_scaled_graph(
         return;
     }
     let max = history.scale(scale);
-    if area.height == 1 {
-        frame.render_widget(
-            spark::widget_scaled(history, area.width, max, Style::default().fg(accent)),
-            area,
-        );
-        if axis != Axis::None && area.width >= 8 {
-            frame.render_widget(
-                Paragraph::new(Span::styled(axis_label(max, axis), theme.dim())),
-                area,
-            );
-        }
+    let gutter = axis_gutter(axis, area.width, area.height);
+    let plot = Rect {
+        x: area.x.saturating_add(gutter),
+        y: area.y,
+        width: area.width.saturating_sub(gutter),
+        height: area.height,
+    };
+    if plot.width == 0 {
         return;
     }
-    let rows = render_cells(history, area.width, area.height, max);
+    if plot.height == 1 {
+        frame.render_widget(
+            spark::widget_scaled(history, plot.width, max, Style::default().fg(accent)),
+            plot,
+        );
+        return;
+    }
+    let rows = render_cells(history, plot.width, plot.height, max);
     for (i, row) in rows.iter().enumerate() {
-        let y = area.y.saturating_add(i as u16);
-        if y >= area.y.saturating_add(area.height) {
+        let y = plot.y.saturating_add(i as u16);
+        if y >= plot.y.saturating_add(plot.height) {
             break;
         }
         let spans: Vec<Span> = row
@@ -80,19 +84,43 @@ pub fn render_scaled_graph(
         frame.render_widget(
             Paragraph::new(Line::from(spans)),
             Rect {
-                x: area.x,
+                x: plot.x,
                 y,
-                width: area.width,
+                width: plot.width,
                 height: 1,
             },
         );
     }
-    if axis != Axis::None && area.width >= 8 {
-        render_axis_ticks(frame, area, max, axis, theme);
+    if gutter > 0 {
+        render_axis_ticks(frame, area, gutter, max, axis, theme);
     }
 }
 
-fn render_axis_ticks(frame: &mut Frame, area: Rect, max: f32, axis: Axis, theme: &Theme) {
+#[must_use]
+pub fn axis_gutter(axis: Axis, width: u16, height: u16) -> u16 {
+    if height < 2 {
+        return 0;
+    }
+    let need: u16 = match axis {
+        Axis::None => 0,
+        Axis::Percent | Axis::Celsius => 5,
+        Axis::Bits => 7,
+    };
+    if need == 0 || width <= need.saturating_add(6) {
+        0
+    } else {
+        need
+    }
+}
+
+fn render_axis_ticks(
+    frame: &mut Frame,
+    area: Rect,
+    gutter: u16,
+    max: f32,
+    axis: Axis,
+    theme: &Theme,
+) {
     let ticks: &[(f32, u16)] = if area.height >= 5 {
         &[
             (1.0, area.y),
@@ -110,23 +138,22 @@ fn render_axis_ticks(frame: &mut Frame, area: Rect, max: f32, axis: Axis, theme:
     } else {
         &[(1.0, area.y)]
     };
-    let width: u16 = match axis {
-        Axis::Percent | Axis::Celsius => 5,
-        Axis::Bits => 7,
-        Axis::None => 0,
-    };
+    let width = gutter.min(area.width);
+    if width == 0 {
+        return;
+    }
+    let w = usize::from(width);
     for (frac, y) in ticks {
         if *y >= area.y + area.height {
             continue;
         }
         let label = axis_label(max * frac, axis);
-        let w = usize::from(width);
         frame.render_widget(
             Paragraph::new(Span::styled(format!("{label:>w$}"), theme.dim())),
             Rect {
                 x: area.x,
                 y: *y,
-                width: width.min(area.width),
+                width,
                 height: 1,
             },
         );
@@ -164,6 +191,7 @@ pub fn render_fill_bar(frame: &mut Frame, area: Rect, ratio: f32, color: Color) 
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use ratatui::text::Span;
@@ -185,5 +213,59 @@ mod tests {
     fn percent_axis_labels() {
         assert_eq!(axis_label(1.0, Axis::Percent), "100%");
         assert_eq!(axis_label(0.5, Axis::Percent), "50%");
+    }
+
+    #[test]
+    fn gutter_only_when_the_plot_still_fits() {
+        assert_eq!(axis_gutter(Axis::Celsius, 40, 8), 5);
+        assert_eq!(axis_gutter(Axis::Percent, 40, 8), 5);
+        assert_eq!(axis_gutter(Axis::None, 40, 8), 0);
+        assert_eq!(axis_gutter(Axis::Celsius, 10, 8), 0);
+        assert_eq!(axis_gutter(Axis::Celsius, 40, 1), 0);
+    }
+
+    #[test]
+    fn celsius_ticks_do_not_sit_on_braille() {
+        use plottypus_core::History;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut history = History::default();
+        for _ in 0..48 {
+            history.push(80.0);
+        }
+        let backend = TestBackend::new(28, 6);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_scaled_graph(
+                    frame,
+                    frame.area(),
+                    &history,
+                    Theme::default().temp,
+                    &Theme::default(),
+                    Scale::Fixed(100.0),
+                    Axis::Celsius,
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let mut out = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                out.push_str(buf[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        assert!(out.contains('°'), "{out}");
+        for y in 0..buf.area.height {
+            for x in 0..5 {
+                let ch = buf[(x, y)].symbol();
+                assert!(
+                    ch.chars().all(|c| !('\u{2800}'..='\u{28FF}').contains(&c)),
+                    "braille in gutter y={y} x={x}: {out}"
+                );
+            }
+        }
     }
 }
