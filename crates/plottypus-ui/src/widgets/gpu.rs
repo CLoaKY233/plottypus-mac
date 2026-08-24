@@ -4,7 +4,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chrome::{Axis, panel_block, render_scaled_graph};
+use crate::chrome::{Axis, Graph, GraphInk, panel_block, render_scaled_graph};
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -36,11 +36,14 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     render_scaled_graph(
         frame,
         plot,
-        view.gpu_history,
-        theme.gpu,
-        theme,
-        Scale::Fixed(1.0),
-        Axis::Percent,
+        Graph {
+            history: view.gpu_history,
+            accent: theme.gpu,
+            theme,
+            scale: Scale::Fixed(1.0),
+            axis: Axis::Percent,
+            ink: GraphInk::Load(view.snapshot.thermal),
+        },
     );
     if let Some(row) = spec_row {
         frame.render_widget(Paragraph::new(spec), row);
@@ -89,21 +92,27 @@ fn render_gpu_graphs(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &
     render_scaled_graph(
         frame,
         util,
-        view.gpu_history,
-        theme.gpu,
-        theme,
-        Scale::Fixed(1.0),
-        Axis::Percent,
+        Graph {
+            history: view.gpu_history,
+            accent: theme.gpu,
+            theme,
+            scale: Scale::Fixed(1.0),
+            axis: Axis::Percent,
+            ink: GraphInk::Load(view.snapshot.thermal),
+        },
     );
     if let Some(temp) = temp {
         render_scaled_graph(
             frame,
             temp,
-            view.gpu_temp_history,
-            theme.temp,
-            theme,
-            Scale::Fixed(100.0),
-            Axis::Celsius,
+            Graph {
+                history: view.gpu_temp_history,
+                accent: theme.temp,
+                theme,
+                scale: Scale::Fixed(100.0),
+                axis: Axis::Celsius,
+                ink: GraphInk::Load(view.snapshot.thermal),
+            },
         );
     }
 }

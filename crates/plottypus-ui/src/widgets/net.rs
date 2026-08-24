@@ -4,7 +4,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chrome::{Axis, panel_block, render_scaled_graph};
+use crate::chrome::{Axis, Graph, GraphInk, panel_block, render_scaled_graph};
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -39,11 +39,14 @@ fn render_net_graph(frame: &mut Frame, area: Rect, history: &History, theme: &Th
     render_scaled_graph(
         frame,
         area,
-        history,
-        theme.net,
-        theme,
-        Scale::Auto { floor: 8_000.0 },
-        Axis::Bits,
+        Graph {
+            history,
+            accent: theme.net,
+            theme,
+            scale: Scale::Auto { floor: 8_000.0 },
+            axis: Axis::Bits,
+            ink: GraphInk::Flat,
+        },
     );
 }
 

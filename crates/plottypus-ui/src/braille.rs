@@ -109,6 +109,27 @@ pub fn render_cells(
     rows
 }
 
+#[must_use]
+pub fn peak_column(history: &History, width: u16, scale: f32) -> Option<usize> {
+    let width = usize::from(width);
+    if width == 0 || history.is_empty() {
+        return None;
+    }
+    let samples = history.downsample_norm(width.saturating_mul(2), scale);
+    let mut best: Option<(usize, f32)> = None;
+    for (col, pair) in samples.chunks(2).enumerate().take(width) {
+        let intensity = pair.iter().copied().fold(0.0_f32, f32::max);
+        if intensity <= 0.02 {
+            continue;
+        }
+        if best.is_none_or(|(_, b)| intensity > b) {
+            best = Some((col, intensity));
+        }
+    }
+    best.filter(|(_, intensity)| *intensity > 0.02)
+        .map(|(col, _)| col)
+}
+
 fn stacked_cell(left: f32, right: f32, height: usize, bias: f32) -> Vec<char> {
     let mut out = vec!['\u{2800}'; height];
     for (row, slot) in out.iter_mut().enumerate() {
@@ -230,6 +251,26 @@ mod tests {
         assert_eq!(rows[0].len(), 1);
         assert!((rows[0][0].intensity - 0.75).abs() < f32::EPSILON);
         assert_ne!(rows[0][0].glyph, '\u{2800}');
+    }
+
+    #[test]
+    fn peak_column_marks_the_loudest_cell() {
+        let mut history = History::with_capacity(8);
+        for v in [0.1, 0.2, 0.05, 0.05, 0.9, 0.95, 0.1, 0.2] {
+            history.push(v);
+        }
+        assert_eq!(peak_column(&history, 4, 1.0), Some(2));
+    }
+
+    #[test]
+    fn peak_column_needs_data() {
+        let history = History::with_capacity(8);
+        assert_eq!(peak_column(&history, 4, 1.0), None);
+        let mut flat = History::with_capacity(8);
+        for _ in 0..8 {
+            flat.push(0.0);
+        }
+        assert_eq!(peak_column(&flat, 4, 1.0), None);
     }
 
     #[test]

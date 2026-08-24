@@ -1,11 +1,11 @@
-use plottypus_core::{History, Scale, bits_per_sec};
+use plottypus_core::{History, Scale, Thermal, bits_per_sec};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
-use crate::braille::render_cells;
+use crate::braille::{peak_column, render_cells};
 use crate::layout::Panel;
 use crate::spark;
 use crate::theme::Theme;
@@ -16,6 +16,12 @@ pub enum Axis {
     Percent,
     Bits,
     Celsius,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphInk {
+    Flat,
+    Load(Thermal),
 }
 
 #[must_use]
@@ -35,20 +41,35 @@ pub fn panel_block<'a>(
     block.title(Line::from(Span::styled(mark, theme.title())).right_aligned())
 }
 
-pub fn render_scaled_graph(
-    frame: &mut Frame,
-    area: Rect,
-    history: &History,
-    accent: Color,
-    theme: &Theme,
-    scale: Scale,
-    axis: Axis,
-) {
+#[derive(Debug, Clone, Copy)]
+pub struct Graph<'a> {
+    pub history: &'a History,
+    pub accent: Color,
+    pub theme: &'a Theme,
+    pub scale: Scale,
+    pub axis: Axis,
+    pub ink: GraphInk,
+}
+
+impl Graph<'_> {
+    fn max(&self) -> f32 {
+        self.history.scale(self.scale)
+    }
+
+    fn thermal(&self) -> Thermal {
+        match self.ink {
+            GraphInk::Flat => Thermal::Nominal,
+            GraphInk::Load(thermal) => thermal,
+        }
+    }
+}
+
+pub fn render_scaled_graph(frame: &mut Frame, area: Rect, g: Graph<'_>) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let max = history.scale(scale);
-    let gutter = axis_gutter(axis, area.width, area.height);
+    let max = g.max();
+    let gutter = axis_gutter(g.axis, area.width, area.height);
     let plot = Rect {
         x: area.x.saturating_add(gutter),
         y: area.y,
@@ -60,12 +81,13 @@ pub fn render_scaled_graph(
     }
     if plot.height == 1 {
         frame.render_widget(
-            spark::widget_scaled(history, plot.width, max, Style::default().fg(accent)),
+            spark::widget_scaled(g.history, plot.width, max, Style::default().fg(g.accent)),
             plot,
         );
         return;
     }
-    let rows = render_cells(history, plot.width, plot.height, max);
+    let thermal = g.thermal();
+    let rows = render_cells(g.history, plot.width, plot.height, max);
     for (i, row) in rows.iter().enumerate() {
         let y = plot.y.saturating_add(i as u16);
         if y >= plot.y.saturating_add(plot.height) {
@@ -77,7 +99,10 @@ pub fn render_scaled_graph(
                 if cell.glyph == '\u{2800}' {
                     Span::raw(" ")
                 } else {
-                    Span::styled(cell.glyph.to_string(), Style::default().fg(accent))
+                    Span::styled(
+                        cell.glyph.to_string(),
+                        g.theme.stain(g.accent, cell.intensity, thermal),
+                    )
                 }
             })
             .collect();
@@ -91,8 +116,23 @@ pub fn render_scaled_graph(
             },
         );
     }
+    if g.ink != GraphInk::Flat
+        && plot.height >= 2
+        && let Some(col) = peak_column(g.history, plot.width, max)
+    {
+        let pip = Rect {
+            x: plot.x + col as u16,
+            y: plot.y,
+            width: 1,
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled("▲", Style::default().fg(g.theme.title))),
+            pip,
+        );
+    }
     if gutter > 0 {
-        render_axis_ticks(frame, area, gutter, max, axis, theme);
+        render_axis_ticks(frame, area, gutter, max, g.axis, g.theme);
     }
 }
 
@@ -241,11 +281,14 @@ mod tests {
                 render_scaled_graph(
                     frame,
                     frame.area(),
-                    &history,
-                    Theme::default().temp,
-                    &Theme::default(),
-                    Scale::Fixed(100.0),
-                    Axis::Celsius,
+                    Graph {
+                        history: &history,
+                        accent: Theme::default().temp,
+                        theme: &Theme::default(),
+                        scale: Scale::Fixed(100.0),
+                        axis: Axis::Celsius,
+                        ink: GraphInk::Flat,
+                    },
                 );
             })
             .unwrap();

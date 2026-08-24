@@ -5,7 +5,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chrome::{Axis, panel_block, render_fill_bar, render_scaled_graph};
+use crate::chrome::{Axis, Graph, GraphInk, panel_block, render_fill_bar, render_scaled_graph};
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -38,11 +38,14 @@ fn render_compact(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &The
         render_scaled_graph(
             frame,
             area,
-            view.cpu_temp_history,
-            theme.temp,
-            theme,
-            Scale::Fixed(100.0),
-            Axis::None,
+            Graph {
+                history: view.cpu_temp_history,
+                accent: theme.temp,
+                theme,
+                scale: Scale::Fixed(100.0),
+                axis: Axis::None,
+                ink: GraphInk::Load(view.snapshot.thermal),
+            },
         );
         return;
     }
@@ -55,11 +58,14 @@ fn render_compact(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &The
     render_scaled_graph(
         frame,
         rows[1],
-        view.cpu_temp_history,
-        theme.temp,
-        theme,
-        Scale::Fixed(100.0),
-        Axis::None,
+        Graph {
+            history: view.cpu_temp_history,
+            accent: theme.temp,
+            theme,
+            scale: Scale::Fixed(100.0),
+            axis: Axis::None,
+            ink: GraphInk::Load(view.snapshot.thermal),
+        },
     );
 }
 
@@ -127,11 +133,14 @@ fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Th
     render_scaled_graph(
         frame,
         parts[i],
-        view.cpu_temp_history,
-        theme.temp,
-        theme,
-        Scale::Fixed(100.0),
-        Axis::Celsius,
+        Graph {
+            history: view.cpu_temp_history,
+            accent: theme.temp,
+            theme,
+            scale: Scale::Fixed(100.0),
+            axis: Axis::Celsius,
+            ink: GraphInk::Load(view.snapshot.thermal),
+        },
     );
     i += 1;
     if show_gpu {
@@ -143,11 +152,14 @@ fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Th
         render_scaled_graph(
             frame,
             parts[i],
-            view.gpu_temp_history,
-            theme.gpu,
-            theme,
-            Scale::Fixed(100.0),
-            Axis::Celsius,
+            Graph {
+                history: view.gpu_temp_history,
+                accent: theme.gpu,
+                theme,
+                scale: Scale::Fixed(100.0),
+                axis: Axis::Celsius,
+                ink: GraphInk::Load(view.snapshot.thermal),
+            },
         );
         i += 1;
     }

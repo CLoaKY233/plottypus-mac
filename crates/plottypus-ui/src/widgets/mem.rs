@@ -4,7 +4,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chrome::{Axis, panel_block, render_fill_bar, render_scaled_graph};
+use crate::chrome::{Axis, Graph, GraphInk, panel_block, render_fill_bar, render_scaled_graph};
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -63,11 +63,14 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         render_scaled_graph(
             frame,
             rows[1],
-            view.mem_history,
-            theme.mem,
-            theme,
-            Scale::Fixed(1.0),
-            Axis::Percent,
+            Graph {
+                history: view.mem_history,
+                accent: theme.mem,
+                theme,
+                scale: Scale::Fixed(1.0),
+                axis: Axis::Percent,
+                ink: GraphInk::Load(view.snapshot.thermal),
+            },
         );
     }
     let spec_area = spec_col.or_else(|| rows.get(2).copied());

@@ -161,6 +161,17 @@ impl Theme {
     }
 
     #[must_use]
+    pub fn stain(self, accent: Color, intensity: f32, thermal: Thermal) -> Style {
+        let t = intensity.clamp(0.0, 1.0);
+        let hot = match thermal {
+            Thermal::Nominal => accent,
+            Thermal::Fair => self.warn,
+            Thermal::Serious | Thermal::Critical => self.crit,
+        };
+        Style::default().fg(lerp(self.dim, hot, t))
+    }
+
+    #[must_use]
     pub fn gradient(self, t: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
         lerp(self.cpu, self.dim, t * 0.4)
@@ -222,5 +233,27 @@ mod tests {
         assert_eq!(theme.temp_color(40.0), theme.temp);
         assert_eq!(theme.temp_color(80.0), theme.warn);
         assert_eq!(theme.temp_color(95.0), theme.crit);
+    }
+
+    #[test]
+    fn stain_ramps_to_accent_when_nominal() {
+        let theme = Theme::default();
+        assert_eq!(
+            theme.stain(theme.cpu, 1.0, Thermal::Nominal).fg,
+            Some(theme.cpu)
+        );
+        assert_eq!(
+            theme.stain(theme.cpu, 0.0, Thermal::Nominal).fg,
+            Some(theme.dim)
+        );
+    }
+
+    #[test]
+    fn fair_thermal_stains_gold() {
+        let theme = Theme::default();
+        let style = theme.stain(theme.cpu, 1.0, Thermal::Fair);
+        assert_eq!(style.fg, Some(theme.warn));
+        let style = theme.stain(theme.cpu, 1.0, Thermal::Serious);
+        assert_eq!(style.fg, Some(theme.crit));
     }
 }
