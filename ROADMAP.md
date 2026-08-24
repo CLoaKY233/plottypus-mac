@@ -27,15 +27,14 @@ Found in hands-on review against the running binary; each has a regression test 
 
 ## Phase 1 — Truth pass (the reason we exist)
 
-- [ ] Headline CPU % = **scaled** ratio; Mach `busy NN%` dim beside it. Locked decision #4 — today
-      every widget renders `.active` and `scaled` is collected but never drawn.
-- [ ] Cluster + core frequency: `Cluster::freq_mhz` is hardcoded 0 (`sampler.rs`), `CoreSample`
-      has no freq field.
+- [x] UI reads the frequency-weighted ratio everywhere the headline appears, with a dim `busy`
+      figure beside it when the two diverge. **Open:** the collector still reports
+      scaled = active; real residency sampling via IOReport is its own project.
+- [ ] Cluster + core frequency (no sysctl source exists on AS; needs IOReport residency work).
 - [ ] Total SoC watts (IOReport `PSTR`) as the power headline in Glance and Work health band.
-- [ ] Graph stain ramp: idle stays empty/dim; load stains mint→gold→red as thermal leaves nominal
-      (`Theme::graph` exists but the render path ignores cell intensity).
-- [ ] Peak pip on the max-in-view column.
-- [ ] Throttle marks where frequency slumps while watts flatten.
+- [x] Graph stain ramp: idle stays dim; load stains accent→gold→red as thermal leaves nominal.
+- [x] Peak pip on the max-in-view column.
+- [ ] Throttle marks where frequency slumps while watts flatten (blocked on a freq source).
 
 ## Phase 2 — Process pass (finish the job)
 
@@ -50,25 +49,23 @@ Found in hands-on review against the running binary; each has a regression test 
 
 ## Phase 3 — Layout pass
 
-- [ ] Work rebalance: one health band on top, process table ≥60% of width (critique §7: PROC is
-      the product, not a side pane at a 48% clamp).
-- [ ] Net/disk demoted off first paint; auto-promote during sustained IO, demote after.
-- [ ] Degradation ladder for shrinking widths (defined hide order; never squeeze into garbage).
-- [ ] Quiet contextual footer: base `? / q`; verbs appear per focus/selection only.
+- [x] Work rebalance: process column default 55% (clamp 35–72); net/disk panes opt-in.
+- [ ] Auto-promote net/disk during sustained IO, demote after.
+- [ ] Degradation ladder for shrinking widths beyond the 60-column gate (defined hide order).
+- [x] Quiet contextual footer: base `? / q`; verbs appear per focus/selection only; paused chip.
 - [ ] Slimmer axis gutters; drop ticks that duplicate title numbers.
 - [ ] Revisit the Work/Glance column gate (~100 cols in PRD vs 60 today) with real small-pane use.
 
 ## Phase 4 — Feel pass
 
-- [ ] Worker-thread sampler: SMC/HID/IOReport FFI must never block draw/poll (macmon's lesson,
-      not yet applied).
+- [x] Worker-thread sampler: FFI never blocks draw/poll (mpsc command/snapshot channels).
 - [ ] DEC 2026 synchronized updates to kill frame flicker.
-- [ ] Persist settings after first change (interval, pane toggles, surface, proc ratio); zero
-      config on first run preserved.
+- [x] Persist settings after first change (interval, pane toggles, sort, surface, proc ratio);
+      zero config on first run preserved.
 - [ ] Battery + power source (IOPS APIs) — core persona works on a laptop.
-- [ ] Status messages expire instead of living in the footer forever.
+- [x] Status messages expire instead of living in the footer forever.
 - [ ] Adaptive background (stop forcing black), colorblind-safe accent ramp.
-- [ ] Measure self CPU against the <2% @ 1s success gate.
+- [x] Measure self CPU: ~1% at 1 s on the reference machine (gate <2%).
 
 ## Phase 5 — later
 

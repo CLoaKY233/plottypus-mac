@@ -26,8 +26,8 @@ Order matters: fmt → clippy → test. CI (`.github/workflows/ci.yml`) runs exa
 
 ## Entrypoints
 
-- Binary/event loop: `crates/plottypus/src/{main,app,event,tui}.rs` (App handles Events; draw + poll loop).
-- Sampling: `Sampler::tick()` in `crates/plottypus-metrics/src/sampler.rs` builds one `Snapshot` (defined in core) per frame tick; UI widgets consume it read-only.
+- Binary/event loop: `crates/plottypus/src/{main,app,event,tui,worker}.rs` (worker thread owns the Sampler; the App drains snapshots over mpsc and owns all UI state).
+- Sampling: `Sampler::tick()` runs on the worker thread and produces one `Snapshot` per interval; `App::apply_snapshot` pushes histories; UI widgets consume snapshots read-only.
 - Per-collector modules live flat under `crates/plottypus-metrics/src/` (cpu, gpu, fan, thermal, memory, net, disk, process, hid, soc, zones, topology).
 
 ## Docs are living reference
