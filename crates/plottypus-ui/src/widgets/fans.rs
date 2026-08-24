@@ -198,7 +198,7 @@ fn fan_speed_spans(fans: &[FanMetric], theme: &Theme) -> Vec<Span<'static>> {
         if i > 0 {
             spans.push(Span::styled("  ", theme.dim()));
         }
-        spans.push(Span::styled(fan.rpm.to_string(), theme.title()));
+        spans.push(Span::styled(format!("{} rpm", fan.rpm), theme.title()));
     }
     spans
 }
@@ -207,9 +207,9 @@ fn fan_speeds_width(fans: &[FanMetric]) -> u16 {
     if fans.is_empty() {
         return 0;
     }
-    let text: String = fans
+    let text = fans
         .iter()
-        .map(|f| f.rpm.to_string())
+        .map(|f| format!("{} rpm", f.rpm))
         .collect::<Vec<_>>()
         .join("  ");
     u16::try_from(text.chars().count().saturating_add(1)).unwrap_or(0)
@@ -483,8 +483,8 @@ mod tests {
         };
         let text = line_text(&title(&fx.view(), &Theme::default()));
         assert!(text.contains("sens"), "{text}");
-        assert!(text.contains("1200"), "{text}");
-        assert!(text.contains("1850"), "{text}");
+        assert!(text.contains("1200 rpm"), "{text}");
+        assert!(text.contains("1850 rpm"), "{text}");
     }
 
     #[test]
@@ -555,8 +555,8 @@ mod tests {
         assert!(text.contains("42°"), "{text}");
         assert!(text.contains("gpu"), "{text}");
         assert!(text.contains("51°"), "{text}");
-        assert!(text.contains("1200"), "{text}");
-        assert!(text.contains("1850"), "{text}");
+        assert!(text.contains("1200 rpm"), "{text}");
+        assert!(text.contains("1850 rpm"), "{text}");
         assert!(!text.contains("nand"), "{text}");
         assert!(!text.contains("related"), "{text}");
     }

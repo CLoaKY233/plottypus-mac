@@ -1,4 +1,6 @@
-use plottypus_core::{Cluster, ClusterKind, CoreSample, CpuSnapshot, Result, Snapshot, SocInfo};
+use plottypus_core::{
+    Cluster, ClusterKind, CoreSample, CpuSnapshot, Result, SensorsSnapshot, Snapshot, SocInfo,
+};
 
 use crate::cpu::CpuCollector;
 use crate::disk::DiskCollector;
@@ -14,8 +16,19 @@ fn fill_missing_temps(snap: &mut Snapshot) {
     if let Some(gpu) = snap.gpu.as_mut()
         && gpu.temp_c.is_none()
     {
-        gpu.temp_c = snap.sensors.gpu_c;
+        gpu.temp_c = snap.sensors.gpu_c.or_else(|| gpu_reading(&snap.sensors));
     }
+}
+
+/// Last-resort GPU die temp: a merged sensor reading whose name says GPU.
+/// Machines whose SMC/HID probes expose no GPU key stay `None` — we never
+/// pass a CPU package temp off as a GPU temp.
+fn gpu_reading(sensors: &SensorsSnapshot) -> Option<f32> {
+    sensors
+        .readings
+        .iter()
+        .find(|r| r.name.to_ascii_lowercase().contains("gpu"))
+        .map(|r| r.celsius)
 }
 
 pub(crate) fn assign_core_roles(cpu: &mut CpuSnapshot, soc: &SocInfo) {
@@ -157,6 +170,35 @@ mod tests {
         snap.sensors.gpu_c = Some(47.0);
         fill_missing_temps(&mut snap);
         assert_eq!(snap.gpu.and_then(|g| g.temp_c), Some(51.0));
+    }
+
+    #[test]
+    fn gpu_temp_falls_back_to_a_gpu_named_reading() {
+        let mut snap = Snapshot::empty();
+        snap.gpu = Some(plottypus_core::GpuSnapshot::default());
+        snap.sensors.readings = vec![
+            plottypus_core::TempReading {
+                name: String::from("nand"),
+                celsius: 38.0,
+            },
+            plottypus_core::TempReading {
+                name: String::from("GPU MTR Temp Sensor0"),
+                celsius: 44.5,
+            },
+        ];
+        fill_missing_temps(&mut snap);
+        assert_eq!(snap.gpu.and_then(|g| g.temp_c), Some(44.5));
+    }
+
+    #[test]
+    fn cpu_package_is_never_passed_off_as_gpu_temp() {
+        let mut snap = Snapshot::empty();
+        snap.gpu = Some(plottypus_core::GpuSnapshot::default());
+        snap.sensors.cpu_c = Some(61.0);
+        snap.sensors.hotspot_c = Some(70.0);
+        fill_missing_temps(&mut snap);
+        // No zone or reading says GPU: honest absence beats a fake number.
+        assert_eq!(snap.gpu.and_then(|g| g.temp_c), None);
     }
 
     #[cfg(target_os = "macos")]

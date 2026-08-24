@@ -279,6 +279,71 @@ mod macos {
     }
 
     fn resolve_name(pid: u32, comm: &str) -> String {
+        let argv0 = pid_argv0(pid);
+        let path = pid_path(pid);
+        preferred_name(pid, argv0.as_deref(), path.as_deref(), comm)
+    }
+
+    /// How the process was invoked (`KERN_PROCARGS2` argv[0]). Matches what
+    /// `ps -o comm=` shows: launchers and symlinks keep their own name even
+    /// when the real executable lives in a version folder.
+    fn pid_argv0(pid: u32) -> Option<String> {
+        let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
+        let mut needed = 0usize;
+        let probe = unsafe {
+            // SAFETY: size probe; oldp is null.
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                mib.len() as libc::c_uint,
+                std::ptr::null_mut(),
+                &raw mut needed,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if probe != 0 || !(8..=16 * 1024).contains(&needed) {
+            return None;
+        }
+        let mut buf = vec![0_u8; needed];
+        let mut got = buf.len();
+        let rc = unsafe {
+            // SAFETY: `buf` is writable for `got` bytes.
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                mib.len() as libc::c_uint,
+                buf.as_mut_ptr().cast(),
+                &raw mut got,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc != 0 || got < 8 {
+            return None;
+        }
+        buf.truncate(got);
+        // Layout: [i32 argc][exec_path\0][NUL padding][argv0\0]…
+        let argc = i32::from_ne_bytes(buf[..4].try_into().ok()?);
+        if argc < 1 {
+            return None;
+        }
+        let mut i = 4;
+        while i < buf.len() && buf[i] != 0 {
+            i += 1;
+        }
+        while i < buf.len() && buf[i] == 0 {
+            i += 1;
+        }
+        let start = i;
+        while i < buf.len() && buf[i] != 0 {
+            i += 1;
+        }
+        if start == i {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&buf[start..i]).into_owned())
+    }
+
+    fn pid_path(pid: u32) -> Option<String> {
         let mut buf = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
         let n = unsafe {
             // SAFETY: `buf` is a writable path buffer of the documented max size.
@@ -288,20 +353,31 @@ mod macos {
                 buf.len() as u32,
             )
         };
-        if n > 0
-            && let Ok(cstr) = CStr::from_bytes_until_nul(&buf)
-            && let Ok(path) = cstr.to_str()
-        {
-            let name = basename(path);
-            if !name.is_empty() {
-                return name.to_string();
+        if n <= 0 {
+            return None;
+        }
+        let cstr = CStr::from_bytes_until_nul(&buf).ok()?;
+        cstr.to_str().ok().map(str::to_owned)
+    }
+
+    /// Display name priority: argv[0] basename (matches `ps`), real path
+    /// basename, kernel `comm` (truncated to 16 bytes), then `pid N`.
+    pub(super) fn preferred_name(
+        pid: u32,
+        argv0: Option<&str>,
+        path: Option<&str>,
+        comm: &str,
+    ) -> String {
+        for candidate in [argv0, path].into_iter().flatten() {
+            let base = basename(candidate);
+            if !base.is_empty() {
+                return base.to_owned();
             }
         }
-        if comm.is_empty() {
-            format!("pid {pid}")
-        } else {
-            comm.to_string()
+        if !comm.is_empty() {
+            return comm.to_owned();
         }
+        format!("pid {pid}")
     }
 
     fn task_info(pid: u32) -> Option<libc::proc_taskinfo> {
@@ -368,6 +444,45 @@ mod tests {
         );
         assert_eq!(basename("kernel_task"), "kernel_task");
         assert_eq!(basename("/"), "/");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn argv0_wins_over_version_folder_paths() {
+        // Regression: /Users/x/.local/share/claude/versions/2.1.241 used to
+        // display as "2.1.241" — both via path basename and, worse, via comm,
+        // which is the executable file name and really is "2.1.241".
+        assert_eq!(
+            macos::preferred_name(
+                50,
+                Some("claude"),
+                Some("/Users/x/.local/share/claude/versions/2.1.241"),
+                "2.1.241"
+            ),
+            "claude"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn name_falls_back_path_then_comm() {
+        assert_eq!(
+            macos::preferred_name(50, None, Some("/Applications/Safari.app/MacOS/Safari"), ""),
+            "Safari"
+        );
+        // comm is capped at 16 bytes; better than nothing when args and path
+        // are unreadable.
+        assert_eq!(
+            macos::preferred_name(50, None, None, "MTLCompilerServi"),
+            "MTLCompilerServi"
+        );
+        assert_eq!(macos::preferred_name(50, Some("/"), Some(""), ""), "/");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn pid_label_when_nothing_else() {
+        assert_eq!(macos::preferred_name(50, None, None, ""), "pid 50");
     }
 
     #[test]

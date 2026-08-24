@@ -103,7 +103,7 @@ fn render_detail(frame: &mut Frame, area: Rect, view: &AppView<'_>, pid: u32, th
             proc.threads
         ),
         format!(" gpu {gpu}"),
-        String::from(" enter / click again already selected · esc close"),
+        String::from(" click another row to switch · esc close"),
     ];
     let width = 48.min(area.width.saturating_sub(2));
     let height = 7.min(area.height);

@@ -421,6 +421,20 @@ mod render_tests {
     }
 
     #[test]
+    fn work_request_rendered_inside_the_panic_window_is_glance() {
+        // Regression for the 40..59 column clamp panic: asking for Work here
+        // must fall back and still paint a complete frame.
+        let mut fx = fixture("");
+        fx.ready = true;
+        fx.snap.cpu.active = 0.3;
+        for (width, height) in [(45_u16, 20_u16), (59, 16), (41, 24)] {
+            let text = paint(&fx.view(), width, height);
+            assert!(text.contains("cpu"), "{width}x{height}: {text}");
+            assert!(text.contains("mem"), "{width}x{height}: {text}");
+        }
+    }
+
+    #[test]
     fn expand_cpu_hides_other_boxes() {
         let mut fx = fixture("");
         fx.expanded = Some(Panel::Cpu);

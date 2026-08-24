@@ -15,7 +15,8 @@ impl Surface {
     }
 }
 
-pub const WORK_MIN_COLS: u16 = 40;
+/// Work needs room for both columns: 24 process + 36 metrics.
+pub const WORK_MIN_COLS: u16 = 60;
 pub const WORK_MIN_ROWS: u16 = 16;
 
 #[must_use]
@@ -42,7 +43,15 @@ mod tests {
     fn typical_terminal_is_work() {
         assert_eq!(auto_surface(80, 24), Surface::Work);
         assert_eq!(auto_surface(120, 30), Surface::Work);
-        assert_eq!(auto_surface(40, 16), Surface::Work);
+        assert_eq!(auto_surface(60, 16), Surface::Work);
+    }
+
+    #[test]
+    fn between_old_gate_and_two_columns_is_glance() {
+        // 40..59 used to pick Work and panic in the layout clamp.
+        for cols in 40..60 {
+            assert_eq!(auto_surface(cols, 24), Surface::Glance, "cols {cols}");
+        }
     }
 
     #[test]

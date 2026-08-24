@@ -184,7 +184,9 @@ pub enum Hit {
     Quit,
 }
 
-const WORK_MIN_WIDTH: u16 = 40;
+/// Must match the two-column budget below: 24 proc + 36 metrics.
+/// Keep in sync with `plottypus_core::WORK_MIN_COLS`.
+const WORK_MIN_WIDTH: u16 = 60;
 const WORK_MIN_HEIGHT: u16 = 16;
 
 #[must_use]
@@ -299,7 +301,9 @@ fn glance_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
 fn work_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
     let ratio = flags.proc_ratio.clamp(22, 48);
     let proc_w = (u32::from(body.width) * u32::from(ratio) / 100) as u16;
-    let proc_w = proc_w.clamp(24, body.width.saturating_sub(36));
+    // The upper bound can dip under 24 on narrow bodies; `.max` keeps `clamp`
+    // from panicking on an inverted range if a caller skips the gate.
+    let proc_w = proc_w.clamp(24, body.width.saturating_sub(36).max(24));
     let cols = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Length(1),
@@ -583,6 +587,42 @@ mod tests {
         let planned = plan(Rect::new(0, 0, 40, 8), Surface::Work, flags());
         assert_eq!(planned.surface, Surface::Glance);
         assert!(planned.processes.is_none());
+    }
+
+    #[test]
+    fn work_between_gates_falls_back_instead_of_panicking() {
+        // Regression: widths 40..59 used to reach work_plan and invert the
+        // process-column clamp (min 24 > max width-36).
+        for width in 40..60_u16 {
+            for height in [16_u16, 20, 24, 31] {
+                let planned = plan(Rect::new(0, 0, width, height), Surface::Work, flags());
+                assert_eq!(
+                    planned.surface,
+                    Surface::Glance,
+                    "{width}x{height} must be Glance"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn plan_and_hit_test_sweep_every_size_without_panic() {
+        for width in (1..=120_u16).step_by(3) {
+            for height in (1..=44_u16).step_by(3) {
+                let area = Rect::new(0, 0, width, height);
+                let mut fs = flags();
+                let _ = plan(area, Surface::Work, fs);
+                let _ = plan(area, Surface::Glance, fs);
+                let _ = hit_test(area, Surface::Work, fs, width / 2, height / 2);
+                for panel in Panel::ALL {
+                    fs.expanded = Some(panel);
+                    let planned = plan(area, Surface::Work, fs);
+                    if let Some(rect) = planned.panel(panel) {
+                        let _ = hit_test(area, Surface::Work, fs, rect.x, rect.y);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
