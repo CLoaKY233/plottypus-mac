@@ -114,7 +114,7 @@ fn load_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
         Span::styled(" util  ", theme.dim()),
         Span::styled(ready_pct(view.ready, gpu), theme.title()),
         Span::styled("   cpu  ", theme.dim()),
-        Span::styled(ready_pct(view.ready, view.snapshot.cpu.active), theme.cpu()),
+        Span::styled(ready_pct(view.ready, view.snapshot.cpu.scaled), theme.cpu()),
     ])
 }
 

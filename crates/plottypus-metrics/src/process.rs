@@ -284,9 +284,7 @@ mod macos {
         preferred_name(pid, argv0.as_deref(), path.as_deref(), comm)
     }
 
-    /// How the process was invoked (`KERN_PROCARGS2` argv[0]). Matches what
-    /// `ps -o comm=` shows: launchers and symlinks keep their own name even
-    /// when the real executable lives in a version folder.
+    /// `KERN_PROCARGS2` argv[0] — matches what `ps -o comm=` shows.
     fn pid_argv0(pid: u32) -> Option<String> {
         let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
         let mut needed = 0usize;
@@ -360,8 +358,6 @@ mod macos {
         cstr.to_str().ok().map(str::to_owned)
     }
 
-    /// Display name priority: argv[0] basename (matches `ps`), real path
-    /// basename, kernel `comm` (truncated to 16 bytes), then `pid N`.
     pub(super) fn preferred_name(
         pid: u32,
         argv0: Option<&str>,

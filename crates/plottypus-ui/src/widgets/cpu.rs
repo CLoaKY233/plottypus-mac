@@ -151,7 +151,7 @@ fn cpu_zones<'a>(view: &'a AppView<'_>) -> Vec<ZoneCard<'a>> {
         zones.push(ZoneCard {
             kind: ClusterKind::Performance,
             solo: true,
-            load: view.snapshot.cpu.active,
+            load: view.snapshot.cpu.scaled,
             temp: Some(temp),
             cores: Vec::new(),
             history: nonempty(view.cpu_temp_history),
@@ -167,7 +167,7 @@ fn zone_card<'a>(
     cores: &[CoreSample],
 ) -> ZoneCard<'a> {
     let zone_cores: Vec<CoreSample> = cores.iter().copied().filter(|c| c.kind == kind).collect();
-    let load = cluster_load(view, kind).unwrap_or_else(|| mean_active(&zone_cores));
+    let load = cluster_load(view, kind).unwrap_or_else(|| mean_scaled(&zone_cores));
     let temp = if solo {
         view.snapshot
             .sensors
@@ -198,14 +198,14 @@ fn cluster_load(view: &AppView<'_>, kind: ClusterKind) -> Option<f32> {
         ClusterKind::Performance => view.snapshot.cpu.p_cluster,
         ClusterKind::Super => view.snapshot.cpu.s_cluster,
     };
-    cluster.map(|c| c.active)
+    cluster.map(|c| c.scaled)
 }
 
-fn mean_active(cores: &[CoreSample]) -> f32 {
+fn mean_scaled(cores: &[CoreSample]) -> f32 {
     if cores.is_empty() {
         0.0
     } else {
-        cores.iter().map(|c| c.active).sum::<f32>() / cores.len() as f32
+        cores.iter().map(|c| c.scaled).sum::<f32>() / cores.len() as f32
     }
 }
 
@@ -300,9 +300,10 @@ fn zone_title(zone: &ZoneCard<'_>, theme: &Theme) -> Line<'static> {
 fn stat_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     let mut parts = vec![Span::styled(" load  ", theme.dim())];
     parts.push(Span::styled(
-        ready_pct(view.ready, view.snapshot.cpu.active),
+        ready_pct(view.ready, view.snapshot.cpu.scaled),
         theme.title(),
     ));
+    busy_span_explicit(view, theme, &mut parts);
     if let Some(t) = view.snapshot.cpu.temp_c.or(view.snapshot.sensors.cpu_c) {
         parts.push(Span::styled("   temp  ", theme.dim()));
         parts.push(Span::styled(format!("{t:.0}°"), theme.temp()));
@@ -319,6 +320,15 @@ fn stat_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
         ));
     }
     Line::from(parts)
+}
+
+fn busy_span_explicit(view: &AppView<'_>, theme: &Theme, parts: &mut Vec<Span<'static>>) {
+    let scaled = view.snapshot.cpu.scaled;
+    let active = view.snapshot.cpu.active;
+    if view.ready && (scaled - active).abs() > 0.01 {
+        parts.push(Span::styled("   busy  ", theme.dim()));
+        parts.push(Span::styled(percent_display(active), theme.fg()));
+    }
 }
 
 fn render_top_procs(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
@@ -372,11 +382,11 @@ fn render_core_list(
 fn core_spans(core: &CoreSample, width: usize, solo: bool, theme: &Theme) -> Vec<Span<'static>> {
     let tag = if solo { "C" } else { core.kind.tag() };
     let label = format!(" {tag}{:<2} ", core.index);
-    let pct = format!(" {:>4}", percent_display(core.active));
+    let pct = format!(" {:>4}", percent_display(core.scaled));
     let meter_w = width.saturating_sub(label.chars().count() + pct.chars().count());
     let mut spans = vec![Span::styled(label, theme.dim())];
     if meter_w >= 2 {
-        spans.push(Span::styled(meter(core.active, meter_w), theme.cpu()));
+        spans.push(Span::styled(meter(core.scaled, meter_w), theme.cpu()));
     }
     spans.push(Span::styled(pct, theme.title()));
     spans
@@ -395,10 +405,11 @@ fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     let mut spans = vec![
         Span::styled(" cpu  ", theme.dim()),
         Span::styled(
-            ready_pct(view.ready, view.snapshot.cpu.active),
+            ready_pct(view.ready, view.snapshot.cpu.scaled),
             theme.title(),
         ),
     ];
+    busy_span(view, theme, &mut spans);
     if view.ready
         && let Some(watts) = view.snapshot.cpu.watts
     {
@@ -411,6 +422,18 @@ fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     }
     spans.push(Span::raw(" "));
     Line::from(spans)
+}
+
+fn busy_span(view: &AppView<'_>, theme: &Theme, spans: &mut Vec<Span<'static>>) {
+    let scaled = view.snapshot.cpu.scaled;
+    let active = view.snapshot.cpu.active;
+    if view.ready && (scaled - active).abs() > 0.01 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("busy {}", percent_display(active)),
+            theme.dim(),
+        ));
+    }
 }
 
 fn spec_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
@@ -511,12 +534,25 @@ mod tests {
     fn title_percent_and_watts() {
         let mut fx = fixture("");
         fx.ready = true;
+        fx.snap.cpu.scaled = 0.184;
         fx.snap.cpu.active = 0.184;
         fx.snap.cpu.watts = Some(8.24);
         let text = line_text(&title(&fx.view(), &Theme::default()));
         assert!(text.contains("cpu"));
         assert!(text.contains("18%"));
         assert!(text.contains("8.2W"));
+        assert!(!text.contains("busy"), "{text}");
+    }
+
+    #[test]
+    fn busy_rides_along_when_scaled_diverges() {
+        let mut fx = fixture("");
+        fx.ready = true;
+        fx.snap.cpu.scaled = 0.18;
+        fx.snap.cpu.active = 0.41;
+        let text = line_text(&title(&fx.view(), &Theme::default()));
+        assert!(text.contains("18%"), "{text}");
+        assert!(text.contains("busy 41%"), "{text}");
     }
 
     #[test]
@@ -637,6 +673,7 @@ mod tests {
 
         let mut fx = fixture("");
         fx.expanded = Some(Panel::Cpu);
+        fx.snap.cpu.scaled = 0.4;
         fx.snap.cpu.active = 0.4;
         fx.snap.cpu.cores = vec![
             CoreSample {

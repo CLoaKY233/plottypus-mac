@@ -170,7 +170,7 @@ fn related_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
         Span::styled(" related  ", theme.dim()),
         Span::styled("cpu ", theme.dim()),
         Span::styled(
-            format!("{:.0}%", view.snapshot.cpu.active.clamp(0.0, 1.0) * 100.0),
+            format!("{:.0}%", view.snapshot.cpu.scaled.clamp(0.0, 1.0) * 100.0),
             theme.cpu(),
         ),
     ];
@@ -428,7 +428,7 @@ mod tests {
 
     fn thermal_fixture() -> crate::widgets::tests_support::Fixture {
         let mut fx = fixture("");
-        fx.snap.cpu.active = 0.18;
+        fx.snap.cpu.scaled = 0.18;
         fx.snap.sensors.cpu_c = Some(42.0);
         fx.snap.sensors.gpu_c = Some(51.0);
         fx.snap.sensors.hotspot_c = Some(60.0);

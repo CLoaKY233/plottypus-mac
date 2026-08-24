@@ -129,7 +129,7 @@ impl App {
         {
             gpu.temp_c = self.snapshot.sensors.gpu_c;
         }
-        self.cpu_history.push(self.snapshot.cpu.active);
+        self.cpu_history.push(self.snapshot.cpu.scaled);
         let gpu = self.snapshot.gpu.map_or(0.0, |g| g.scaled);
         self.gpu_history.push(gpu);
         let mem_total = self.snapshot.memory.total_bytes;

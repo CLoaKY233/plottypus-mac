@@ -184,8 +184,7 @@ pub enum Hit {
     Quit,
 }
 
-/// Must match the two-column budget below: 24 proc + 36 metrics.
-/// Keep in sync with `plottypus_core::WORK_MIN_COLS`.
+/// Keep in sync with `plottypus_core::WORK_MIN_COLS` (24 proc + 36 metrics).
 const WORK_MIN_WIDTH: u16 = 60;
 const WORK_MIN_HEIGHT: u16 = 16;
 
@@ -301,8 +300,7 @@ fn glance_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
 fn work_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
     let ratio = flags.proc_ratio.clamp(22, 48);
     let proc_w = (u32::from(body.width) * u32::from(ratio) / 100) as u16;
-    // The upper bound can dip under 24 on narrow bodies; `.max` keeps `clamp`
-    // from panicking on an inverted range if a caller skips the gate.
+    // keeps the clamp range from inverting below the gate
     let proc_w = proc_w.clamp(24, body.width.saturating_sub(36).max(24));
     let cols = Layout::horizontal([
         Constraint::Fill(1),

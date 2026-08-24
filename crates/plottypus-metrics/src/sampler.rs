@@ -20,9 +20,6 @@ fn fill_missing_temps(snap: &mut Snapshot) {
     }
 }
 
-/// Last-resort GPU die temp: a merged sensor reading whose name says GPU.
-/// Machines whose SMC/HID probes expose no GPU key stay `None` — we never
-/// pass a CPU package temp off as a GPU temp.
 fn gpu_reading(sensors: &SensorsSnapshot) -> Option<f32> {
     sensors
         .readings
@@ -46,21 +43,22 @@ pub(crate) fn assign_core_roles(cpu: &mut CpuSnapshot, soc: &SocInfo) {
 
 fn summarize_cluster(cores: &[CoreSample], kind: ClusterKind) -> Option<Cluster> {
     let mut n = 0_u32;
-    let mut sum = 0.0_f32;
+    let mut sum_scaled = 0.0_f32;
+    let mut sum_active = 0.0_f32;
     for core in cores {
         if core.kind == kind {
             n += 1;
-            sum += core.active;
+            sum_scaled += core.scaled;
+            sum_active += core.active;
         }
     }
     if n == 0 {
         return None;
     }
-    let active = sum / n as f32;
     Some(Cluster {
         kind,
-        scaled: active,
-        active,
+        scaled: sum_scaled / n as f32,
+        active: sum_active / n as f32,
         freq_mhz: 0,
     })
 }
