@@ -25,23 +25,24 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         // Greyscale chrome. Color is a scale, not a logo per box.
+        // Bright enough to read over blurry translucent terminal backgrounds.
         Self {
-            fg: Color::Rgb(0xcc, 0xcc, 0xcc),
-            dim: Color::Rgb(0x60, 0x60, 0x60),
-            title: Color::Rgb(0xee, 0xee, 0xee),
-            hi: Color::Rgb(0xa8, 0x4a, 0x42),
-            cpu: Color::Rgb(0x6f, 0xbe, 0x96),
-            gpu: Color::Rgb(0x6f, 0xbe, 0x96),
-            mem: Color::Rgb(0xc2, 0xb6, 0x68),
-            net: Color::Rgb(0xa8, 0xa2, 0xd2),
-            disk: Color::Rgb(0xc2, 0xb6, 0x68),
-            fan: Color::Rgb(0xc2, 0xb6, 0x68),
-            temp: Color::Rgb(0x4a, 0x90, 0xc8),
-            border: Color::Rgb(0x30, 0x30, 0x30),
-            border_focus: Color::Rgb(0x58, 0x6e, 0x5c),
-            warn: Color::Rgb(0xc2, 0xb6, 0x68),
-            crit: Color::Rgb(0xd0, 0x52, 0x52),
-            ok: Color::Rgb(0x6f, 0xbe, 0x96),
+            fg: Color::Rgb(0xf2, 0xf2, 0xf2),
+            dim: Color::Rgb(0x9a, 0x9a, 0x9a),
+            title: Color::Rgb(0xff, 0xff, 0xff),
+            hi: Color::Rgb(0xff, 0x8a, 0x7a),
+            cpu: Color::Rgb(0x82, 0xe2, 0xaa),
+            gpu: Color::Rgb(0x82, 0xe2, 0xaa),
+            mem: Color::Rgb(0xee, 0xd9, 0x7e),
+            net: Color::Rgb(0xc3, 0xbd, 0xf7),
+            disk: Color::Rgb(0xee, 0xd9, 0x7e),
+            fan: Color::Rgb(0xee, 0xd9, 0x7e),
+            temp: Color::Rgb(0x79, 0xb8, 0xf0),
+            border: Color::Rgb(0xc0, 0xc0, 0xc0),
+            border_focus: Color::Rgb(0xff, 0xff, 0xff),
+            warn: Color::Rgb(0xf5, 0xc5, 0x42),
+            crit: Color::Rgb(0xff, 0x70, 0x70),
+            ok: Color::Rgb(0x82, 0xe2, 0xaa),
         }
     }
 }
@@ -137,14 +138,13 @@ impl Theme {
         }
     }
 
-    /// Tall graphs: top = accent, bottom = dark start. Idle stays quiet.
     #[must_use]
     pub fn series_row(self, accent: Color, row: usize, rows: usize) -> Color {
         if rows <= 1 {
             return accent;
         }
         let t = row as f32 / (rows.saturating_sub(1) as f32);
-        lerp(accent, self.border, t.clamp(0.0, 1.0))
+        lerp(accent, self.dim, t.clamp(0.0, 1.0))
     }
 
     #[must_use]
