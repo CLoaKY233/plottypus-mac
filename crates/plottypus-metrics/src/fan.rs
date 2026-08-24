@@ -114,11 +114,9 @@ mod macos {
     const SMC_CMD_READ_KEYINFO: u8 = 9;
     const MAX_FANS: u8 = 8;
     const PROBE_TEMPS: [[u8; 4]; 24] = [
-        *b"TCMz", *b"TCMb", *b"TC0P", *b"TC0D", *b"TC0C", *b"TC0E",
-        *b"TG0P", *b"Tg05", *b"Tg0D", *b"Tg0L", *b"Tg0T",
-        *b"Tp01", *b"Tp05", *b"Tp09", *b"Tp0T", *b"Tp0D",
-        *b"Te05", *b"Ts0P", *b"TH0x", *b"TH0T", *b"TA0P", *b"TaLC",
-        *b"Tm02", *b"Tm06",
+        *b"TCMz", *b"TCMb", *b"TC0P", *b"TC0D", *b"TC0C", *b"TC0E", *b"TG0P", *b"Tg05", *b"Tg0D",
+        *b"Tg0L", *b"Tg0T", *b"Tp01", *b"Tp05", *b"Tp09", *b"Tp0T", *b"Tp0D", *b"Te05", *b"Ts0P",
+        *b"TH0x", *b"TH0T", *b"TA0P", *b"TaLC", *b"Tm02", *b"Tm06",
     ];
 
     #[repr(C)]
@@ -430,7 +428,9 @@ mod macos {
     }
 
     fn key_name(key: u32) -> String {
-        String::from_utf8_lossy(&key.to_be_bytes()).trim().to_string()
+        String::from_utf8_lossy(&key.to_be_bytes())
+            .trim()
+            .to_string()
     }
 }
 

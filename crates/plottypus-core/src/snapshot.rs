@@ -236,11 +236,7 @@ fn mean_opts(values: &[Option<f32>]) -> Option<f32> {
         sum += *value;
         n += 1;
     }
-    if n == 0 {
-        None
-    } else {
-        Some(sum / n as f32)
-    }
+    if n == 0 { None } else { Some(sum / n as f32) }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

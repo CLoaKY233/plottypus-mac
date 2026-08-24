@@ -148,12 +148,21 @@ mod macos {
         let text = if unsafe { CFGetTypeID(val) } == unsafe { CFStringGetTypeID() } {
             let mut buf = [0_i8; 64];
             let ok = unsafe {
-                CFStringGetCString(val, buf.as_mut_ptr(), buf.len() as isize, K_CF_STRING_ENCODING_UTF8)
+                CFStringGetCString(
+                    val,
+                    buf.as_mut_ptr(),
+                    buf.len() as isize,
+                    K_CF_STRING_ENCODING_UTF8,
+                )
             };
             if ok == 0 {
                 None
             } else {
-                let bytes: Vec<u8> = buf.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
+                let bytes: Vec<u8> = buf
+                    .iter()
+                    .take_while(|&&c| c != 0)
+                    .map(|&c| c as u8)
+                    .collect();
                 Some(String::from_utf8_lossy(&bytes).into_owned())
             }
         } else if unsafe { CFGetTypeID(val) } == unsafe { CFDataGetTypeID() } {
@@ -176,9 +185,7 @@ mod macos {
     fn cf_u32(val: CfTypeRef) -> Option<u32> {
         let n = if unsafe { CFGetTypeID(val) } == unsafe { CFNumberGetTypeID() } {
             let mut out: i32 = 0;
-            let ok = unsafe {
-                CFNumberGetValue(val, K_CF_NUMBER_SINT32, (&raw mut out).cast())
-            };
+            let ok = unsafe { CFNumberGetValue(val, K_CF_NUMBER_SINT32, (&raw mut out).cast()) };
             if ok == 0 || out < 0 {
                 None
             } else {

@@ -128,7 +128,8 @@ fn cpu_zones<'a>(view: &'a AppView<'_>) -> Vec<ZoneCard<'a>> {
     let mut kinds: Vec<ClusterKind> = ClusterKind::ALL
         .into_iter()
         .filter(|kind| {
-            cores.iter().any(|c| c.kind == *kind) || view.snapshot.sensors.zone_temp(*kind).is_some()
+            cores.iter().any(|c| c.kind == *kind)
+                || view.snapshot.sensors.zone_temp(*kind).is_some()
         })
         .collect();
     let solo = kinds.len() <= 1;
@@ -141,7 +142,11 @@ fn cpu_zones<'a>(view: &'a AppView<'_>) -> Vec<ZoneCard<'a>> {
         .collect();
     if !solo
         && zones.iter().all(|z| z.temp.is_none())
-        && let Some(temp) = view.snapshot.cpu.temp_c.or(view.snapshot.sensors.best_cpu_c())
+        && let Some(temp) = view
+            .snapshot
+            .cpu
+            .temp_c
+            .or(view.snapshot.sensors.best_cpu_c())
     {
         zones.push(ZoneCard {
             kind: ClusterKind::Performance,

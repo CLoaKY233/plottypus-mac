@@ -81,7 +81,8 @@ mod macos {
             if i >= nlevels as usize {
                 break;
             }
-            let Some(kind) = sys::sysctl_string(name_key).and_then(|n| crate::zones::kind_from_level_name(&n))
+            let Some(kind) =
+                sys::sysctl_string(name_key).and_then(|n| crate::zones::kind_from_level_name(&n))
             else {
                 return Vec::new();
             };

@@ -127,8 +127,10 @@ mod macos {
         let key_usage = cf_str(c"PrimaryUsage")?;
         let mut page: i32 = 0xff00;
         let mut usage: i32 = 0x0005;
-        let num_page = unsafe { CFNumberCreate(ptr::null(), K_CF_NUMBER_SINT32, (&raw mut page).cast()) };
-        let num_usage = unsafe { CFNumberCreate(ptr::null(), K_CF_NUMBER_SINT32, (&raw mut usage).cast()) };
+        let num_page =
+            unsafe { CFNumberCreate(ptr::null(), K_CF_NUMBER_SINT32, (&raw mut page).cast()) };
+        let num_usage =
+            unsafe { CFNumberCreate(ptr::null(), K_CF_NUMBER_SINT32, (&raw mut usage).cast()) };
         if num_page.is_null() || num_usage.is_null() {
             return None;
         }
@@ -154,7 +156,9 @@ mod macos {
     }
 
     fn cf_str(text: &std::ffi::CStr) -> Option<CfStringRef> {
-        let s = unsafe { CFStringCreateWithCString(ptr::null(), text.as_ptr(), K_CF_STRING_ENCODING_UTF8) };
+        let s = unsafe {
+            CFStringCreateWithCString(ptr::null(), text.as_ptr(), K_CF_STRING_ENCODING_UTF8)
+        };
         if s.is_null() { None } else { Some(s) }
     }
 
@@ -170,10 +174,19 @@ mod macos {
         let name = if unsafe { CFGetTypeID(val) } == unsafe { CFStringGetTypeID() } {
             let mut buf = [0_i8; 128];
             let ok = unsafe {
-                CFStringGetCString(val, buf.as_mut_ptr(), buf.len() as isize, K_CF_STRING_ENCODING_UTF8)
+                CFStringGetCString(
+                    val,
+                    buf.as_mut_ptr(),
+                    buf.len() as isize,
+                    K_CF_STRING_ENCODING_UTF8,
+                )
             };
             if ok != 0 {
-                let bytes: Vec<u8> = buf.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
+                let bytes: Vec<u8> = buf
+                    .iter()
+                    .take_while(|&&c| c != 0)
+                    .map(|&c| c as u8)
+                    .collect();
                 String::from_utf8_lossy(&bytes).into_owned()
             } else {
                 String::new()
@@ -198,7 +211,6 @@ mod macos {
             None
         }
     }
-
 }
 
 #[cfg(test)]

@@ -226,8 +226,7 @@ impl App {
             }
             Event::Work => self.lock_surface(Surface::Work),
             Event::Expand => {
-                if self.focus.panel() == Panel::Processes
-                    && self.expanded != Some(Panel::Processes)
+                if self.focus.panel() == Panel::Processes && self.expanded != Some(Panel::Processes)
                 {
                     self.open_detail();
                 } else {
@@ -281,8 +280,8 @@ impl App {
             return;
         }
         let proc_w = self.last_area.width.saturating_sub(col.saturating_add(1));
-        let ratio = u16::try_from(u32::from(proc_w) * 100 / u32::from(self.last_area.width))
-            .unwrap_or(34);
+        let ratio =
+            u16::try_from(u32::from(proc_w) * 100 / u32::from(self.last_area.width)).unwrap_or(34);
         self.proc_ratio = ratio.clamp(22, 48);
     }
 

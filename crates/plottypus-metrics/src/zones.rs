@@ -160,7 +160,10 @@ pub(crate) fn snapshot_from_named(named: &[(String, f32)], source: Source) -> Se
     snap
 }
 
-pub(crate) fn merge_sensors(mut base: SensorsSnapshot, overlay: &SensorsSnapshot) -> SensorsSnapshot {
+pub(crate) fn merge_sensors(
+    mut base: SensorsSnapshot,
+    overlay: &SensorsSnapshot,
+) -> SensorsSnapshot {
     if overlay.e_c.is_some() {
         base.e_c = overlay.e_c;
     }
@@ -284,7 +287,10 @@ mod tests {
             hid_temp_zone("pACC MTR Temp Sensor2", true),
             TempZone::Super
         );
-        assert_eq!(hid_temp_zone("mACC MTR Temp Sensor0", true), TempZone::Performance);
+        assert_eq!(
+            hid_temp_zone("mACC MTR Temp Sensor0", true),
+            TempZone::Performance
+        );
         assert_eq!(hid_temp_zone("PMU tdie3", false), TempZone::Cpu);
         assert_eq!(hid_temp_zone("GPU MTR Temp Sensor1", false), TempZone::Gpu);
         assert_eq!(hid_temp_zone("NAND CH0 temp", false), TempZone::Other);
@@ -345,10 +351,7 @@ mod tests {
             Some(ClusterKind::Efficiency)
         );
         assert_eq!(
-            counts_from_levels(&[
-                (ClusterKind::Super, 6),
-                (ClusterKind::Performance, 12),
-            ]),
+            counts_from_levels(&[(ClusterKind::Super, 6), (ClusterKind::Performance, 12),]),
             (0, 12, 6)
         );
     }

@@ -94,11 +94,9 @@ fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Th
     let label_h = 2u16.saturating_add(u16::from(show_gpu));
     let min_graphs = 2u16.saturating_add(if show_gpu { 2 } else { 0 });
     let fan_h = reserved_fan_height(fans.len(), area.height);
-    let leftover = area.height.saturating_sub(
-        label_h
-            .saturating_add(min_graphs)
-            .saturating_add(fan_h),
-    );
+    let leftover = area
+        .height
+        .saturating_sub(label_h.saturating_add(min_graphs).saturating_add(fan_h));
     let extra_h = leftover.min(u16::try_from(extras.len()).unwrap_or(0));
 
     let mut constraints = vec![
@@ -240,7 +238,10 @@ fn render_headline(
         return;
     }
     if named.is_empty() {
-        frame.render_widget(Paragraph::new(Line::from(fan_speed_spans(fans, theme))), area);
+        frame.render_widget(
+            Paragraph::new(Line::from(fan_speed_spans(fans, theme))),
+            area,
+        );
     } else {
         render_temp_line(frame, area, named, theme);
     }
