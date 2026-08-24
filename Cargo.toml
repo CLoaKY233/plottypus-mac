@@ -12,7 +12,7 @@ default-members = ["crates/plottypus"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/cloaky/plottypus"
+repository = "https://github.com/CLoaKY233/plottypus-mac"
 rust-version = "1.88"
 
 [workspace.dependencies]
