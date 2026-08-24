@@ -6,6 +6,34 @@ pub const INTERVAL_FAST: Duration = Duration::from_millis(500);
 pub const INTERVAL_DEFAULT: Duration = Duration::from_secs(1);
 pub const INTERVAL_SLOW: Duration = Duration::from_secs(2);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProcSort {
+    #[default]
+    Cpu,
+    Mem,
+    Pid,
+}
+
+impl ProcSort {
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Cpu => Self::Mem,
+            Self::Mem => Self::Pid,
+            Self::Pid => Self::Cpu,
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Mem => "mem",
+            Self::Pid => "pid",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub interval: Duration,
@@ -15,6 +43,8 @@ pub struct Config {
     pub show_disk: bool,
     pub show_fans: bool,
     pub show_cores: bool,
+    pub show_threads: bool,
+    pub proc_sort: ProcSort,
 }
 
 impl Default for Config {
@@ -27,6 +57,8 @@ impl Default for Config {
             show_disk: true,
             show_fans: true,
             show_cores: true,
+            show_threads: false,
+            proc_sort: ProcSort::Cpu,
         }
     }
 }

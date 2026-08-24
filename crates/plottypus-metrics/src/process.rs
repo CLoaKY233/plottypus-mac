@@ -178,6 +178,7 @@ mod macos {
             cpu,
             mem_bytes,
             threads,
+            gpu: 0.0,
         }
     }
 

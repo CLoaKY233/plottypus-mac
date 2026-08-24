@@ -236,6 +236,8 @@ pub struct Process {
     pub cpu: f32,
     pub mem_bytes: u64,
     pub threads: u32,
+    /// Share of GPU if known; 0 means unmeasured (macOS has no cheap per-pid GPU %).
+    pub gpu: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]

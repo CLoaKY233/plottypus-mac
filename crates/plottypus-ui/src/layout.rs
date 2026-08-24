@@ -279,7 +279,14 @@ fn glance_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
     let mut planned = empty_plan(Surface::Glance, footer);
     planned.cpu = Some(rows[0]);
     if mid_h > 0 {
-        assign_row(&mut planned, rows[1], mid_panels(flags));
+        assign_row(
+            &mut planned,
+            rows[1],
+            [Panel::Gpu, Panel::Mem]
+                .into_iter()
+                .filter(|p| flags.visible(*p))
+                .collect(),
+        );
     }
     if io_h > 0 {
         assign_row(&mut planned, rows[2], io_panels(flags));
@@ -304,23 +311,30 @@ fn work_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
     let split = cols[1];
     let right = cols[2];
 
+    let hero_on = !hero_panels(flags).is_empty();
     let mid_on = !mid_panels(flags).is_empty();
     let io_on = !io_panels(flags).is_empty();
-    let rows = match (mid_on, io_on) {
-        (true, true) => Layout::vertical([
-            Constraint::Fill(5),
-            Constraint::Fill(4),
-            Constraint::Fill(3),
-        ])
-        .split(left),
-        (true, false) => Layout::vertical([Constraint::Fill(5), Constraint::Fill(4)]).split(left),
-        (false, true) => Layout::vertical([Constraint::Fill(5), Constraint::Fill(3)]).split(left),
-        (false, false) => Layout::vertical([Constraint::Fill(1)]).split(left),
-    };
+    let mut weights = Vec::new();
+    if hero_on {
+        weights.push(Constraint::Fill(5));
+    }
+    if mid_on {
+        weights.push(Constraint::Fill(3));
+    }
+    if io_on {
+        weights.push(Constraint::Fill(3));
+    }
+    if weights.is_empty() {
+        weights.push(Constraint::Fill(1));
+    }
+    let rows = Layout::vertical(weights).split(left);
 
     let mut planned = empty_plan(Surface::Work, footer);
-    planned.cpu = Some(rows[0]);
-    let mut idx = 1;
+    let mut idx = 0;
+    if hero_on {
+        assign_row(&mut planned, rows[idx], hero_panels(flags));
+        idx += 1;
+    }
     if mid_on {
         assign_row(&mut planned, rows[idx], mid_panels(flags));
         idx += 1;
@@ -333,8 +347,15 @@ fn work_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
     planned
 }
 
+fn hero_panels(flags: LayoutFlags) -> Vec<Panel> {
+    [Panel::Cpu, Panel::Gpu]
+        .into_iter()
+        .filter(|p| flags.visible(*p))
+        .collect()
+}
+
 fn mid_panels(flags: LayoutFlags) -> Vec<Panel> {
-    [Panel::Gpu, Panel::Mem, Panel::Fans]
+    [Panel::Mem, Panel::Fans]
         .into_iter()
         .filter(|p| flags.visible(*p))
         .collect()
@@ -477,27 +498,21 @@ mod tests {
         let net = planned.net.unwrap_or_default();
         let disk = planned.disk.unwrap_or_default();
         assert!(cpu.height >= 8, "cpu {cpu:?}");
-        let metric_h = cpu.height + gpu.height + net.height;
-        assert!(
-            cpu.height * 2 <= metric_h,
-            "cpu must not dominate the metric column {cpu:?}"
-        );
+        assert_eq!(cpu.y, gpu.y, "cpu and gpu are equal hero tiles");
+        assert_eq!(cpu.height, gpu.height);
+        assert!(cpu.x < gpu.x);
         assert!(cpu.width + proc.width < 140);
         assert!(proc.height >= 20, "proc should be full left-column height {proc:?}");
         assert!(proc.x > cpu.x + cpu.width, "proc on the right");
         assert!(planned.split.is_some());
-        assert!(gpu.height >= 5 && mem.height >= 5 && fans.height >= 5);
-        assert!(
-            gpu.height + 2 >= cpu.height.saturating_sub(4),
-            "gpu/mem/sens should stay in ratio with cpu"
-        );
-        assert_eq!(gpu.y, mem.y);
+        assert!(mem.height >= 5 && fans.height >= 5);
         assert_eq!(mem.y, fans.y);
-        assert!(gpu.x < mem.x && mem.x < fans.x);
+        assert!(mem.x < fans.x);
         assert_eq!(net.y, disk.y);
         assert!(net.x < disk.x);
-        assert!(cpu.y + cpu.height <= gpu.y);
-        assert!(gpu.y + gpu.height <= net.y);
+        assert!(cpu.y + cpu.height <= mem.y);
+        assert!(mem.y + mem.height <= net.y);
+        assert!(cpu.height > mem.height, "heroes taller than mem/sens");
         assert_eq!(proc.y, cpu.y);
         assert_eq!(planned.footer.height, 1);
         assert!(planned.expanded.is_none());
@@ -519,8 +534,8 @@ mod tests {
         let gpu = planned.gpu.unwrap_or_default();
         assert!(cpu.height >= 6);
         assert!(proc.height >= 5);
+        assert_eq!(cpu.height, gpu.height);
         assert!(cpu.height + 2 < 24, "cpu must not eat the screen");
-        assert!(cpu.height <= gpu.height + 5, "cpu vs mid-row ratio {cpu:?} {gpu:?}");
     }
 
     #[test]

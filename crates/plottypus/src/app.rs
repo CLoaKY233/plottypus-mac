@@ -46,6 +46,8 @@ struct App {
     net_rx_history: History,
     net_tx_history: History,
     disk_history: History,
+    cpu_temp_history: History,
+    gpu_temp_history: History,
     surface: Surface,
     focus: Focus,
     expanded: Option<Panel>,
@@ -54,6 +56,7 @@ struct App {
     settings: bool,
     confirm_kill: bool,
     confirm_pid: Option<u32>,
+    detail_pid: Option<u32>,
     searching: bool,
     frozen: bool,
     ready: bool,
@@ -78,6 +81,8 @@ impl App {
             net_rx_history: History::default(),
             net_tx_history: History::default(),
             disk_history: History::default(),
+            cpu_temp_history: History::default(),
+            gpu_temp_history: History::default(),
             surface: Surface::Work,
             focus: Focus::Processes,
             expanded: None,
@@ -86,6 +91,7 @@ impl App {
             settings: false,
             confirm_kill: false,
             confirm_pid: None,
+            detail_pid: None,
             searching: false,
             frozen: false,
             ready: false,
@@ -132,6 +138,20 @@ impl App {
         self.net_tx_history
             .push(self.snapshot.network.tx_bps as f32);
         self.disk_history.push(self.snapshot.disk.used_ratio());
+        self.cpu_temp_history.push(
+            self.snapshot
+                .cpu
+                .temp_c
+                .or(self.snapshot.sensors.cpu_c)
+                .unwrap_or(0.0),
+        );
+        self.gpu_temp_history.push(
+            self.snapshot
+                .gpu
+                .and_then(|g| g.temp_c)
+                .or(self.snapshot.sensors.gpu_c)
+                .unwrap_or(0.0),
+        );
         self.ready = true;
         self.last_tick = Instant::now();
         self.proc.selected_pid = keep_pid;
@@ -176,6 +196,8 @@ impl App {
             self.settings = false;
         } else if self.confirm_kill {
             self.cancel_kill();
+        } else if self.detail_pid.is_some() {
+            self.detail_pid = None;
         } else if self.expanded.is_some() {
             self.expanded = None;
         } else if self.searching || !self.proc.filter.is_empty() {
@@ -194,7 +216,15 @@ impl App {
                 self.lock_surface(Surface::Glance);
             }
             Event::Work => self.lock_surface(Surface::Work),
-            Event::Expand => self.expand_focus(),
+            Event::Expand => {
+                if self.focus.panel() == Panel::Processes
+                    && self.expanded != Some(Panel::Processes)
+                {
+                    self.open_detail();
+                } else {
+                    self.expand_focus();
+                }
+            }
             Event::NextPanel => self.cycle_focus(1),
             Event::PrevPanel => self.cycle_focus(-1),
             Event::Search => {
@@ -228,6 +258,8 @@ impl App {
             Event::ToggleCores => self.config.show_cores = !self.config.show_cores,
             Event::ToggleDisk => self.config.show_disk = !self.config.show_disk,
             Event::ToggleFans => self.config.show_fans = !self.config.show_fans,
+            Event::ToggleThreads => self.config.show_threads = !self.config.show_threads,
+            Event::CycleSort => self.config.proc_sort = self.config.proc_sort.next(),
             Event::Click { col, row } => self.on_click(col, row),
             Event::Drag { col, .. } => self.drag_split(col),
             Event::MouseUp => self.dragging_split = false,
@@ -264,8 +296,14 @@ impl App {
             Event::ToggleCores => self.config.show_cores = !self.config.show_cores,
             Event::ToggleDisk => self.config.show_disk = !self.config.show_disk,
             Event::ToggleFans => self.config.show_fans = !self.config.show_fans,
+            Event::ToggleThreads => self.config.show_threads = !self.config.show_threads,
+            Event::CycleSort => self.config.proc_sort = self.config.proc_sort.next(),
             _ => {}
         }
+    }
+
+    fn open_detail(&mut self) {
+        self.detail_pid = self.selected_pid();
     }
 
     fn on_click(&mut self, col: u16, row: u16) {
@@ -280,8 +318,12 @@ impl App {
                 self.focus = Focus::Processes;
                 let rows = self.visible();
                 if let Some(proc) = rows.get(idx) {
-                    self.proc.selected_pid = Some(proc.pid);
-                    self.proc.selected = idx;
+                    if self.proc.selected_pid == Some(proc.pid) {
+                        self.detail_pid = Some(proc.pid);
+                    } else {
+                        self.proc.selected_pid = Some(proc.pid);
+                        self.proc.selected = idx;
+                    }
                 }
             }
             Some(Hit::Panel(panel)) => {
@@ -452,6 +494,8 @@ impl App {
             net_rx_history: &self.net_rx_history,
             net_tx_history: &self.net_tx_history,
             disk_history: &self.disk_history,
+            cpu_temp_history: &self.cpu_temp_history,
+            gpu_temp_history: &self.gpu_temp_history,
             surface: self.effective_surface(),
             focus: self.focus,
             proc: &self.proc,
@@ -466,6 +510,9 @@ impl App {
             show_disk: self.config.show_disk,
             show_fans: self.config.show_fans,
             show_cores: self.config.show_cores,
+            show_threads: self.config.show_threads,
+            sort: self.config.proc_sort,
+            detail_pid: self.detail_pid,
             expanded: self.expanded,
             proc_ratio: self.proc_ratio,
             interval_ms: u64::try_from(self.config.interval.as_millis()).unwrap_or(1000),
@@ -546,6 +593,7 @@ mod tests {
                 cpu: 1.0,
                 mem_bytes: 1,
                 threads: 1,
+                gpu: 0.0,
             },
             plottypus_core::Process {
                 pid: 2,
@@ -554,6 +602,7 @@ mod tests {
                 cpu: 90.0,
                 mem_bytes: 1,
                 threads: 1,
+                gpu: 0.0,
             },
         ];
         app.proc.selected_pid = Some(1);

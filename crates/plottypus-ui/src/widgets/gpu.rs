@@ -22,35 +22,106 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    if view.snapshot.gpu.is_none() {
+    if view.is_expanded(Panel::Gpu) {
+        render_expanded(frame, inner, view, theme);
         return;
     }
-
-    let specs = spec_items(view);
-    let (graph, spec_col, spec_row) = place_specs(inner, !specs.is_empty());
+    let spec = spec_line(view, theme);
+    let (plot, spec_row) = if inner.height >= 4 && !spec.spans.is_empty() {
+        let rows = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).split(inner);
+        (rows[0], Some(rows[1]))
+    } else {
+        (inner, None)
+    };
     render_scaled_graph(
         frame,
-        graph,
+        plot,
         view.gpu_history,
         theme.gpu,
         theme,
         Scale::Fixed(1.0),
         Axis::Percent,
     );
-    if let Some(col) = spec_col {
-        let take = usize::from(col.height);
-        let lines: Vec<Line> = specs
-            .iter()
-            .take(take)
-            .map(|s| Line::from(Span::styled(s.clone(), theme.dim())))
-            .collect();
-        frame.render_widget(Paragraph::new(lines), col);
-    } else if let Some(row) = spec_row {
-        frame.render_widget(
-            Paragraph::new(Span::styled(specs.join("  "), theme.dim())),
-            row,
+    if let Some(row) = spec_row {
+        frame.render_widget(Paragraph::new(spec), row);
+    }
+}
+
+fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Fill(2),
+        Constraint::Fill(1),
+        Constraint::Fill(2),
+    ])
+    .split(area);
+    frame.render_widget(Paragraph::new(vec![spec_line(view, theme), load_line(view, theme)]), rows[0]);
+    render_scaled_graph(
+        frame,
+        rows[1],
+        view.gpu_history,
+        theme.gpu,
+        theme,
+        Scale::Fixed(1.0),
+        Axis::Percent,
+    );
+    if rows.len() > 2 {
+        render_scaled_graph(
+            frame,
+            rows[2],
+            view.gpu_temp_history,
+            theme.temp,
+            theme,
+            Scale::Fixed(100.0),
+            Axis::Celsius,
         );
     }
+    if rows.len() > 3 {
+        render_related_procs(frame, rows[3], view, theme);
+    }
+}
+
+fn load_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
+    let gpu = view.snapshot.gpu.map_or(0.0, |g| g.scaled);
+    Line::from(vec![
+        Span::styled(" util  ", theme.dim()),
+        Span::styled(ready_pct(view.ready, gpu), theme.title()),
+        Span::styled("   cpu  ", theme.dim()),
+        Span::styled(ready_pct(view.ready, view.snapshot.cpu.active), theme.cpu()),
+    ])
+}
+
+fn spec_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
+    let items = spec_items(view);
+    if items.is_empty() {
+        return Line::from("");
+    }
+    Line::from(Span::styled(format!(" {}", items.join("  ")), theme.dim()))
+}
+
+fn render_related_procs(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
+    let mut procs = view.snapshot.processes.clone();
+    procs.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
+    let take = usize::from(area.height.saturating_sub(1)).min(procs.len()).min(8);
+    let mut lines = vec![Line::from(Span::styled(
+        " busiest (cpu — per-process gpu % is not exposed without IOReport)",
+        theme.dim(),
+    ))];
+    for proc in procs.into_iter().take(take) {
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {:>6}  ", proc.pid), theme.dim()),
+            Span::styled(format!("{:<16}", {
+                let mut n: String = proc.name.chars().take(16).collect();
+                if proc.name.chars().count() > 16 {
+                    n.pop();
+                    n.push('…');
+                }
+                n
+            }), theme.fg()),
+            Span::styled(format!(" {:>5.1}", proc.cpu), theme.cpu()),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
@@ -68,11 +139,16 @@ fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(watts_display(watts), theme.gpu()));
             }
-            if let Some(temp) = gpu.temp_c.or(view.snapshot.sensors.gpu_c) {
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(format!("{temp:.0}°"), theme.temp()));
-            }
         }
+    }
+    if let Some(temp) = view
+        .snapshot
+        .gpu
+        .and_then(|g| g.temp_c)
+        .or(view.snapshot.sensors.gpu_c)
+    {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(format!("{temp:.0}°"), theme.temp()));
     }
     spans.push(Span::raw(" "));
     Line::from(spans)
@@ -93,26 +169,6 @@ fn spec_items(view: &AppView<'_>) -> Vec<String> {
         items.push(format!("{}c", view.snapshot.soc.gpu_cores));
     }
     items
-}
-
-fn place_specs(area: Rect, has_specs: bool) -> (Rect, Option<Rect>, Option<Rect>) {
-    if !has_specs {
-        return (area, None, None);
-    }
-    if area.width >= 28 {
-        let cols = Layout::horizontal([
-            Constraint::Fill(1),
-            Constraint::Length(1),
-            Constraint::Length(12),
-        ])
-        .split(area);
-        return (cols[0], Some(cols[2]), None);
-    }
-    if area.height >= 2 {
-        let rows = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).split(area);
-        return (rows[0], None, Some(rows[1]));
-    }
-    (area, None, None)
 }
 
 fn ready_pct(ready: bool, ratio: f32) -> String {

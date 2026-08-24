@@ -5,7 +5,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chrome::{panel_block, render_fill_bar};
+use plottypus_core::Scale;
+use crate::chrome::{Axis, panel_block, render_fill_bar, render_scaled_graph};
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -23,13 +24,18 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     if inner.width == 0 || inner.height == 0 {
         return;
     }
+    if view.is_expanded(Panel::Fans) {
+        render_expanded(frame, inner, view, theme);
+        return;
+    }
 
     let named = named_temps(view);
     let extras = extra_temps(view);
     let fans = &view.snapshot.fans.fans;
 
     let named_h = u16::from(!named.is_empty());
-    let after_named = inner.height.saturating_sub(named_h);
+    let graph_h = if inner.height >= 5 { 2 } else { 0 };
+    let after_named = inner.height.saturating_sub(named_h + graph_h);
     let fan_n = u16::try_from(fans.len()).unwrap_or(0);
     let fan_h = if fan_n == 0 {
         0
@@ -46,6 +52,9 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     if named_h > 0 {
         constraints.push(Constraint::Length(1));
     }
+    if graph_h > 0 {
+        constraints.push(Constraint::Length(graph_h));
+    }
     if extra_h > 0 {
         constraints.push(Constraint::Length(extra_h));
     }
@@ -57,21 +66,34 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     }
 
     let parts = Layout::vertical(constraints).split(inner);
-    let extra_i = usize::from(named_h > 0);
-    let fan_i = extra_i + usize::from(extra_h > 0);
+    let mut i = 0;
     if named_h > 0 {
-        render_temp_line(frame, parts[0], &named, theme);
+        render_temp_line(frame, parts[i], &named, theme);
+        i += 1;
+    }
+    if graph_h > 0 {
+        render_scaled_graph(
+            frame,
+            parts[i],
+            view.cpu_temp_history,
+            theme.temp,
+            theme,
+            Scale::Fixed(100.0),
+            Axis::None,
+        );
+        i += 1;
     }
     if extra_h > 0 {
         render_temp_list(
             frame,
-            parts[extra_i],
+            parts[i],
             &extras[..usize::from(extra_h)],
             theme,
         );
+        i += 1;
     }
     if fan_h > 0 {
-        render_fans(frame, parts[fan_i], fans, theme);
+        render_fans(frame, parts[i], fans, theme);
     }
 }
 
@@ -102,6 +124,69 @@ fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
         }
     }
     Line::from(spans)
+}
+
+fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Fill(1),
+        Constraint::Fill(1),
+        Constraint::Length(5),
+        Constraint::Fill(1),
+    ])
+    .split(area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled(" related  ", theme.dim()),
+                Span::styled("cpu ", theme.dim()),
+                Span::styled(
+                    format!(
+                        "{:.0}%",
+                        view.snapshot.cpu.active.clamp(0.0, 1.0) * 100.0
+                    ),
+                    theme.cpu(),
+                ),
+                Span::styled("   gpu ", theme.dim()),
+                Span::styled(
+                    format!(
+                        "{:.0}%",
+                        view.snapshot.gpu.map_or(0.0, |g| g.scaled) * 100.0
+                    ),
+                    theme.gpu(),
+                ),
+            ]),
+            Line::from(Span::styled(" cpu temp", theme.dim())),
+        ]),
+        rows[0],
+    );
+    render_scaled_graph(
+        frame,
+        rows[1],
+        view.cpu_temp_history,
+        theme.temp,
+        theme,
+        Scale::Fixed(100.0),
+        Axis::Celsius,
+    );
+    if rows.len() > 2 {
+        render_scaled_graph(
+            frame,
+            rows[2],
+            view.gpu_temp_history,
+            theme.gpu,
+            theme,
+            Scale::Fixed(100.0),
+            Axis::Celsius,
+        );
+    }
+    if rows.len() > 3 {
+        render_fans(frame, rows[3], &view.snapshot.fans.fans, theme);
+    }
+    if rows.len() > 4 {
+        let extras = extra_temps(view);
+        render_temp_list(frame, rows[4], &extras, theme);
+    }
 }
 
 fn title_temp(view: &AppView<'_>) -> Option<f32> {

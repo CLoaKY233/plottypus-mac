@@ -29,6 +29,8 @@ pub enum Event {
     ToggleCores,
     ToggleDisk,
     ToggleFans,
+    ToggleThreads,
+    CycleSort,
     Expand,
     NextPanel,
     PrevPanel,
@@ -99,6 +101,8 @@ fn map_settings_key(key: KeyEvent) -> Option<Event> {
         KeyCode::Char('4') => Some(Event::ToggleCores),
         KeyCode::Char('5') => Some(Event::ToggleDisk),
         KeyCode::Char('6') => Some(Event::ToggleFans),
+        KeyCode::Char('7') => Some(Event::CycleSort),
+        KeyCode::Char('8') => Some(Event::ToggleThreads),
         KeyCode::Char('s') => Some(Event::Settings),
         _ => None,
     }

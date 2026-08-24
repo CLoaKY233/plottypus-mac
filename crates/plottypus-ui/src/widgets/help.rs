@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use crate::theme::Theme;
 use crate::widgets::AppView;
 
-const HELP: [&str; 14] = [
+const HELP: [&str; 15] = [
     "tab / shift-tab          move between boxes",
     "enter                    expand focused box",
     "esc                      close expand / help / search",
@@ -15,6 +15,7 @@ const HELP: [&str; 14] = [
     "drag the gutter          resize process column",
     "click ×                  back to home",
     "/                        search processes",
+    "enter on a process       process details",
     "x                        kill selected (then y/n)",
     "s                        settings (interval, panes)",
     "f                        pause live updates",
@@ -28,21 +29,31 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &Theme) {
 }
 
 pub fn render_settings(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let interval = format!("1  interval     {} ms   ( [ ] or 1/2/3 )", view.interval_ms);
-    let gpu = format!("2  gpu          {}", on_off(view.show_gpu));
-    let net = format!("3  network      {}", on_off(view.show_net));
+    let interval = format!("1  interval     {} ms   [ ] cycles 0.5 / 1 / 2 s", view.interval_ms);
+    let gpu = format!("2  gpu pane     {}", on_off(view.show_gpu));
+    let net = format!("3  net pane     {}", on_off(view.show_net));
     let cores = format!("4  per-core     {}", on_off(view.show_cores));
-    let disk = format!("5  disk         {}", on_off(view.show_disk));
-    let fans = format!("6  fans         {}", on_off(view.show_fans));
+    let disk = format!("5  disk pane    {}", on_off(view.show_disk));
+    let fans = format!("6  sensors      {}", on_off(view.show_fans));
+    let sort = format!("7  proc sort    {}", view.sort.label());
+    let threads = format!("8  threads col  {}", on_off(view.show_threads));
     let lines = [
+        " sampling",
         interval.as_str(),
+        "",
+        " panes",
         gpu.as_str(),
         net.as_str(),
-        cores.as_str(),
         disk.as_str(),
         fans.as_str(),
+        cores.as_str(),
         "",
-        "esc  close",
+        " processes",
+        sort.as_str(),
+        threads.as_str(),
+        "",
+        " ↗ expands a box · click a process twice for details",
+        " esc  close",
     ];
     popup(frame, area, " settings ", &lines, theme);
 }
@@ -56,7 +67,7 @@ fn popup(frame: &mut Frame, area: Rect, title: &str, lines: &[&str], theme: &The
         .iter()
         .map(|s| Line::from(Span::styled((*s).to_owned(), theme.fg())))
         .collect();
-    let width = 56.min(area.width.saturating_sub(2));
+    let width = 62.min(area.width.saturating_sub(2));
     let height = u16::try_from(text.len() + 2).unwrap_or(8).min(area.height);
     let rect = centered(area, width, height);
     frame.render_widget(Clear, rect);

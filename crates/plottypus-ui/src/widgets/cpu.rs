@@ -23,13 +23,18 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         return;
     }
 
-    let specs = spec_lines(view, theme);
     if view.is_expanded(Panel::Cpu) {
-        render_expanded(frame, inner, view, theme, &specs);
+        render_expanded(frame, inner, view, theme);
         return;
     }
 
-    let (plot, specs_area) = split_specs(inner, &specs);
+    let spec = spec_line(view, theme);
+    let (plot, spec_row) = if inner.height >= 4 && !spec.spans.is_empty() {
+        let rows = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).split(inner);
+        (rows[0], Some(rows[1]))
+    } else {
+        (inner, None)
+    };
     render_scaled_graph(
         frame,
         plot,
@@ -39,54 +44,90 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         Scale::Fixed(1.0),
         Axis::Percent,
     );
-    if let Some(specs_area) = specs_area {
-        let take = usize::from(specs_area.height);
-        frame.render_widget(
-            Paragraph::new(specs.into_iter().take(take).collect::<Vec<_>>()),
-            specs_area,
-        );
+    if let Some(row) = spec_row {
+        frame.render_widget(Paragraph::new(spec), row);
     }
 }
 
-fn render_expanded(
-    frame: &mut Frame,
-    area: Rect,
-    view: &AppView<'_>,
-    theme: &Theme,
-    specs: &[Line<'static>],
-) {
-    let core_n = view.snapshot.cpu.cores.len().min(24);
-    let core_h = u16::try_from(core_n).unwrap_or(0).min(area.height.saturating_sub(6));
-    let rows = if core_h > 0 {
-        Layout::vertical([
-            Constraint::Length(u16::try_from(specs.len()).unwrap_or(1).min(3)),
-            Constraint::Fill(1),
-            Constraint::Length(core_h),
-        ])
-        .split(area)
-    } else {
-        Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).split(area)
-    };
-    if !specs.is_empty() {
-        frame.render_widget(
-            Paragraph::new(specs.to_vec()),
-            rows[0],
-        );
-    }
-    if rows.len() > 1 {
-        render_scaled_graph(
-            frame,
-            rows[1],
-            view.cpu_history,
-            theme.cpu,
-            theme,
-            Scale::Fixed(1.0),
-            Axis::Percent,
-        );
-    }
+fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
+    let core_n = view.snapshot.cpu.cores.len().min(20);
+    let core_h = u16::try_from(core_n).unwrap_or(0).min(area.height / 3).max(4);
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Fill(3),
+        Constraint::Length(core_h.min(area.height.saturating_sub(8))),
+        Constraint::Fill(2),
+    ])
+    .split(area);
+    frame.render_widget(Paragraph::new(vec![spec_line(view, theme), stat_line(view, theme)]), rows[0]);
+    render_scaled_graph(
+        frame,
+        rows[1],
+        view.cpu_history,
+        theme.cpu,
+        theme,
+        Scale::Fixed(1.0),
+        Axis::Percent,
+    );
     if rows.len() > 2 {
         render_core_list(frame, rows[2], view, theme);
     }
+    if rows.len() > 3 {
+        render_top_procs(frame, rows[3], view, theme);
+    }
+}
+
+fn stat_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
+    let mut parts = vec![Span::styled(" load  ", theme.dim())];
+    parts.push(Span::styled(
+        ready_pct(view.ready, view.snapshot.cpu.active),
+        theme.title(),
+    ));
+    if let Some(t) = view.snapshot.cpu.temp_c.or(view.snapshot.sensors.cpu_c) {
+        parts.push(Span::styled("   temp  ", theme.dim()));
+        parts.push(Span::styled(format!("{t:.0}°"), theme.temp()));
+    }
+    if let Some(hot) = view.snapshot.sensors.hotspot_c {
+        parts.push(Span::styled("   hot  ", theme.dim()));
+        parts.push(Span::styled(format!("{hot:.0}°"), theme.temp()));
+    }
+    match view.snapshot.thermal {
+        Thermal::Nominal => {
+            parts.push(Span::styled("   thermal  ", theme.dim()));
+            parts.push(Span::styled("nominal", theme.dim()));
+        }
+        other => {
+            if let Some(word) = thermal_word(other) {
+                parts.push(Span::styled("   thermal  ", theme.dim()));
+                parts.push(Span::styled(word.to_owned(), theme.thermal(other)));
+            }
+        }
+    }
+    Line::from(parts)
+}
+
+fn render_top_procs(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
+    let mut procs = view.snapshot.processes.clone();
+    procs.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
+    let take = usize::from(area.height.saturating_sub(1)).min(procs.len()).min(8);
+    let mut lines = vec![Line::from(Span::styled(" busiest", theme.dim()))];
+    for proc in procs.into_iter().take(take) {
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {:>6}  ", proc.pid), theme.dim()),
+            Span::styled(format!("{:<16}", truncate(&proc.name, 16)), theme.fg()),
+            Span::styled(format!(" {:>5.1}", proc.cpu), theme.cpu()),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn truncate(name: &str, width: usize) -> String {
+    let mut out: String = name.chars().take(width).collect();
+    if name.chars().count() > width {
+        out.pop();
+        out.push('…');
+    }
+    out
 }
 
 fn render_core_list(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
@@ -148,44 +189,22 @@ fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
-fn spec_lines(view: &AppView<'_>, theme: &Theme) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+fn spec_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
+    let mut spans = Vec::new();
     let name = view.snapshot.soc.name.trim();
     if !name.is_empty() {
-        lines.push(Line::from(Span::styled(name.to_owned(), theme.fg())));
+        spans.push(Span::styled(format!(" {name}  "), theme.fg()));
     }
     if let Some(cores) = core_label(view.snapshot.soc.e_cores, view.snapshot.soc.p_cores) {
-        lines.push(Line::from(Span::styled(cores, theme.dim())));
-    }
-    if let Some(temp) = view.snapshot.cpu.temp_c {
-        lines.push(Line::from(Span::styled(format!("{temp:.0}°"), theme.dim())));
+        spans.push(Span::styled(format!("{cores}  "), theme.dim()));
     }
     if let Some(mhz) = view.snapshot.cpu.freq_mhz.filter(|mhz| *mhz > 0) {
-        lines.push(Line::from(Span::styled(freq_label(mhz), theme.dim())));
-    }
-    if let Some(word) = thermal_word(view.snapshot.thermal) {
-        lines.push(Line::from(Span::styled(
-            word.to_owned(),
-            theme.thermal(view.snapshot.thermal),
-        )));
+        spans.push(Span::styled(format!("{}  ", freq_label(mhz)), theme.dim()));
     }
     if view.frozen {
-        lines.push(Line::from(Span::styled("paused", theme.dim())));
+        spans.push(Span::styled("paused", theme.dim()));
     }
-    lines
-}
-
-fn split_specs(area: Rect, specs: &[Line<'static>]) -> (Rect, Option<Rect>) {
-    if specs.is_empty() || area.width < 50 {
-        return (area, None);
-    }
-    let cols = Layout::horizontal([
-        Constraint::Fill(1),
-        Constraint::Length(1),
-        Constraint::Length(22),
-    ])
-    .split(area);
-    (cols[0], Some(cols[2]))
+    Line::from(spans)
 }
 
 fn ready_pct(ready: bool, ratio: f32) -> String {
@@ -232,10 +251,6 @@ mod tests {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
-    fn lines_text(lines: &[Line<'_>]) -> String {
-        lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
-    }
-
     #[test]
     fn title_ellipsis_until_ready() {
         let mut fx = fixture("");
@@ -280,12 +295,12 @@ mod tests {
         fx.snap.cpu.temp_c = Some(42.0);
         fx.snap.cpu.freq_mhz = Some(3200);
         fx.snap.thermal = Thermal::Nominal;
-        let text = lines_text(&spec_lines(&fx.view(), &Theme::default()));
+        let text = line_text(&spec_line(&fx.view(), &Theme::default()));
         assert!(text.contains("M4 Pro"));
         assert!(text.contains("4E + 8P"));
-        assert!(text.contains("42°"));
         assert!(text.contains("3.2GHz"));
-        assert!(!text.contains("nominal"));
+        let stats = line_text(&stat_line(&fx.view(), &Theme::default()));
+        assert!(stats.contains("42°"));
     }
 
     #[test]
@@ -293,10 +308,10 @@ mod tests {
         let mut fx = fixture("");
         fx.frozen = true;
         fx.snap.thermal = Thermal::Fair;
-        let text = lines_text(&spec_lines(&fx.view(), &Theme::default()));
+        let text = line_text(&spec_line(&fx.view(), &Theme::default()));
         assert!(text.contains("paused"));
-        assert!(text.contains("fair"));
-        assert!(!text.contains("nominal"));
+        let stats = line_text(&stat_line(&fx.view(), &Theme::default()));
+        assert!(stats.contains("fair"));
     }
 
     #[test]

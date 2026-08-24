@@ -8,7 +8,7 @@ mod mem;
 mod net;
 mod processes;
 
-use plottypus_core::{History, Snapshot, Surface};
+use plottypus_core::{History, ProcSort, Snapshot, Surface};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
@@ -72,6 +72,8 @@ pub struct AppView<'a> {
     pub net_rx_history: &'a History,
     pub net_tx_history: &'a History,
     pub disk_history: &'a History,
+    pub cpu_temp_history: &'a History,
+    pub gpu_temp_history: &'a History,
     pub surface: Surface,
     pub focus: Focus,
     pub proc: &'a ProcView,
@@ -86,6 +88,9 @@ pub struct AppView<'a> {
     pub show_disk: bool,
     pub show_fans: bool,
     pub show_cores: bool,
+    pub show_threads: bool,
+    pub sort: ProcSort,
+    pub detail_pid: Option<u32>,
     pub expanded: Option<Panel>,
     pub proc_ratio: u16,
     pub interval_ms: u64,
@@ -179,6 +184,8 @@ pub(crate) mod tests_support {
         pub net_rx: History,
         pub net_tx: History,
         pub disk: History,
+        pub cpu_temp: History,
+        pub gpu_temp: History,
         pub proc: ProcView,
         pub surface: Surface,
         pub focus: Focus,
@@ -199,6 +206,7 @@ pub(crate) mod tests_support {
             cpu,
             mem_bytes: 0,
             threads: 1,
+            gpu: 0.0,
         }
     }
 
@@ -218,6 +226,8 @@ pub(crate) mod tests_support {
             net_rx: History::default(),
             net_tx: History::default(),
             disk: History::default(),
+            cpu_temp: History::default(),
+            gpu_temp: History::default(),
             proc: ProcView {
                 filter: filter.to_owned(),
                 ..ProcView::default()
@@ -244,6 +254,8 @@ pub(crate) mod tests_support {
                 net_rx_history: &self.net_rx,
                 net_tx_history: &self.net_tx,
                 disk_history: &self.disk,
+                cpu_temp_history: &self.cpu_temp,
+                gpu_temp_history: &self.gpu_temp,
                 surface: self.surface,
                 focus: self.focus,
                 proc: &self.proc,
@@ -258,6 +270,9 @@ pub(crate) mod tests_support {
                 show_disk: true,
                 show_fans: true,
                 show_cores: true,
+                show_threads: false,
+                sort: plottypus_core::ProcSort::Cpu,
+                detail_pid: None,
                 expanded: self.expanded,
                 proc_ratio: 34,
                 interval_ms: 1000,
@@ -392,7 +407,9 @@ mod render_tests {
             text.contains('×') || text.contains('x') || text.contains('X'),
             "{text}"
         );
-        assert!(!text.contains("Xcode"), "{text}");
+        assert!(text.contains("busiest"), "{text}");
+        assert!(text.contains("Xcode"), "{text}");
+        assert!(!text.contains("Macintosh"), "{text}");
     }
 
     #[test]

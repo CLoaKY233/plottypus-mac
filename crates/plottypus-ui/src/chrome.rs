@@ -15,6 +15,7 @@ pub enum Axis {
     None,
     Percent,
     Bits,
+    Celsius,
 }
 
 #[must_use]
@@ -87,12 +88,45 @@ pub fn render_scaled_graph(
         );
     }
     if axis != Axis::None && area.width >= 8 {
+        render_axis_ticks(frame, area, max, axis, theme);
+    }
+}
+
+fn render_axis_ticks(frame: &mut Frame, area: Rect, max: f32, axis: Axis, theme: &Theme) {
+    let ticks: &[(f32, u16)] = if area.height >= 5 {
+        &[
+            (1.0, area.y),
+            (0.75, area.y + area.height / 4),
+            (0.5, area.y + area.height / 2),
+            (0.25, area.y + area.height * 3 / 4),
+            (0.0, area.y + area.height.saturating_sub(1)),
+        ]
+    } else if area.height >= 3 {
+        &[
+            (1.0, area.y),
+            (0.5, area.y + area.height / 2),
+            (0.0, area.y + area.height.saturating_sub(1)),
+        ]
+    } else {
+        &[(1.0, area.y)]
+    };
+    let width: u16 = match axis {
+        Axis::Percent | Axis::Celsius => 5,
+        Axis::Bits => 7,
+        Axis::None => 0,
+    };
+    for (frac, y) in ticks {
+        if *y >= area.y + area.height {
+            continue;
+        }
+        let label = axis_label(max * frac, axis);
+        let w = usize::from(width);
         frame.render_widget(
-            Paragraph::new(Span::styled(format!(" {}", axis_label(max, axis)), theme.dim())),
+            Paragraph::new(Span::styled(format!("{label:>w$}"), theme.dim())),
             Rect {
                 x: area.x,
-                y: area.y,
-                width: area.width.min(10),
+                y: *y,
+                width: width.min(area.width),
                 height: 1,
             },
         );
@@ -103,6 +137,7 @@ fn axis_label(value: f32, axis: Axis) -> String {
     match axis {
         Axis::Percent => format!("{:.0}%", (value * 100.0).round()),
         Axis::Bits => bits_per_sec(value.max(0.0) as u64),
+        Axis::Celsius => format!("{:.0}°", value.round()),
         Axis::None => String::new(),
     }
 }

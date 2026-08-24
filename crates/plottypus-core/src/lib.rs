@@ -5,7 +5,7 @@ mod history;
 mod snapshot;
 mod surface;
 
-pub use config::{Config, INTERVAL_DEFAULT, INTERVAL_FAST, INTERVAL_SLOW};
+pub use config::{Config, ProcSort, INTERVAL_DEFAULT, INTERVAL_FAST, INTERVAL_SLOW};
 pub use error::{Error, Result};
 pub use format::{bits_per_sec, bytes_short, percent_display, watts_display};
 pub use history::{History, Scale, nice_ceiling};
