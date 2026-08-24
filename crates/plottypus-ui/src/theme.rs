@@ -4,7 +4,6 @@ use ratatui::style::{Color, Modifier, Style};
 /// One ink family. Graphs use the panel accent, faded by row — not a traffic-light LUT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
-    pub bg: Color,
     pub fg: Color,
     pub dim: Color,
     pub title: Color,
@@ -27,7 +26,6 @@ impl Default for Theme {
     fn default() -> Self {
         // Greyscale chrome. Color is a scale, not a logo per box.
         Self {
-            bg: Color::Rgb(0x00, 0x00, 0x00),
             fg: Color::Rgb(0xcc, 0xcc, 0xcc),
             dim: Color::Rgb(0x60, 0x60, 0x60),
             title: Color::Rgb(0xee, 0xee, 0xee),

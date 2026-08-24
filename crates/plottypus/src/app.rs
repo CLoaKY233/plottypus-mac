@@ -351,6 +351,9 @@ impl App {
     }
 
     fn handle_move(&mut self, delta: i32) {
+        if self.expanded.is_some() && self.expanded != Some(Panel::Processes) {
+            return;
+        }
         if self.focus.panel() == Panel::Processes || self.expanded == Some(Panel::Processes) {
             self.searching = false;
             self.focus = Focus::Processes;
@@ -483,9 +486,6 @@ impl App {
         };
         if let Some(&panel) = panels.get(next) {
             self.focus = Focus::from_panel(panel);
-            if self.expanded.is_some() {
-                self.expanded = Some(panel);
-            }
         }
     }
 
@@ -808,5 +808,17 @@ mod tests {
         app.handle(Event::NextPanel);
         assert_eq!(app.focus, expected);
         assert!(app.expanded.is_none());
+
+        let focused = app.focus.panel();
+        app.handle(Event::Expand);
+        assert_eq!(app.expanded, Some(focused));
+        app.focus = Focus::Processes;
+        app.handle(Event::Move(1));
+        app.handle(Event::Move(-1));
+        assert_eq!(
+            app.expanded,
+            Some(focused),
+            "wheel must not switch the expanded panel"
+        );
     }
 }

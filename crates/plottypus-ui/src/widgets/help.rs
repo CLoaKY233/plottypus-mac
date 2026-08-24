@@ -89,7 +89,7 @@ fn popup(frame: &mut Frame, area: Rect, title: &str, lines: &[Line<'static>], th
                 .border_type(BorderType::Rounded)
                 .title(title.to_owned())
                 .border_style(theme.border(true))
-                .style(ratatui::style::Style::default().bg(theme.bg).fg(theme.fg)),
+                .style(ratatui::style::Style::default().fg(theme.fg)),
         ),
         rect,
     );

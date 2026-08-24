@@ -125,8 +125,7 @@ fn render_detail(frame: &mut Frame, area: Rect, view: &AppView<'_>, pid: u32, th
             ratatui::widgets::Block::bordered()
                 .border_type(ratatui::widgets::BorderType::Rounded)
                 .title(" process ")
-                .border_style(theme.border(true))
-                .style(ratatui::style::Style::default().bg(theme.bg)),
+                .border_style(theme.border(true)),
         ),
         rect,
     );

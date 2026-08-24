@@ -3,9 +3,9 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph};
+use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
-use crate::braille::{peak_column, render_cells};
+use crate::braille::render_cells;
 use crate::layout::Panel;
 use crate::spark;
 use crate::theme::Theme;
@@ -35,7 +35,6 @@ pub fn panel_block<'a>(
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(theme.border(focused || expanded))
-        .style(Style::default().bg(theme.bg).fg(theme.fg))
         .title(title);
     let mark = if expanded { " × " } else { " ↗ " };
     block.title(Line::from(Span::styled(mark, theme.title())).right_aligned())
@@ -116,21 +115,6 @@ pub fn render_scaled_graph(frame: &mut Frame, area: Rect, g: Graph<'_>) {
             },
         );
     }
-    if g.ink != GraphInk::Flat
-        && plot.height >= 2
-        && let Some(col) = peak_column(g.history, plot.width, max)
-    {
-        let pip = Rect {
-            x: plot.x + col as u16,
-            y: plot.y,
-            width: 1,
-            height: 1,
-        };
-        frame.render_widget(
-            Paragraph::new(Span::styled("▲", Style::default().fg(g.theme.title))),
-            pip,
-        );
-    }
     if g.axis == Axis::Celsius && plot.height >= 3 && plot.width >= 10 {
         let hint = Rect {
             x: plot.x,
@@ -138,11 +122,9 @@ pub fn render_scaled_graph(frame: &mut Frame, area: Rect, g: Graph<'_>) {
             width: 4.min(plot.width),
             height: 1,
         };
+        frame.render_widget(Clear, hint);
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                axis_label(max, g.axis),
-                Style::default().fg(g.theme.dim).bg(g.theme.bg),
-            )),
+            Paragraph::new(Span::styled(axis_label(max, g.axis), g.theme.dim())),
             hint,
         );
     }

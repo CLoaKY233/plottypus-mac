@@ -59,7 +59,7 @@ impl Default for Config {
             interval: INTERVAL_DEFAULT,
             surface: None,
             show_gpu: true,
-            show_net: false,
+            show_net: true,
             show_disk: false,
             show_fans: true,
             show_cores: true,
@@ -216,9 +216,9 @@ mod tests {
     }
 
     #[test]
-    fn defaults_hide_io_panes() {
+    fn defaults_show_net_but_hide_disk() {
         let cfg = Config::default();
-        assert!(!cfg.show_net);
+        assert!(cfg.show_net);
         assert!(!cfg.show_disk);
         assert_eq!(cfg.proc_ratio, PROC_RATIO_DEFAULT);
     }
