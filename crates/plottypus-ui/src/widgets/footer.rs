@@ -29,98 +29,91 @@ fn footer_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     if let Some(status) = view.status {
         return Line::from(Span::styled(format!(" {status} "), theme.warn_style()));
     }
-    if view.expanded.is_some() {
-        return expanded_line(view, theme);
-    }
-    if view.surface == Surface::Glance {
-        return Line::from(vec![
-            Span::styled(" ?", theme.title()),
-            Span::styled(" help", theme.dim()),
-            Span::styled("   w", theme.title()),
-            Span::styled(" processes", theme.dim()),
-            Span::styled("   q", theme.title()),
-            Span::styled(" quit", theme.dim()),
-        ]);
-    }
-    work_line(theme, true)
-}
 
-fn expanded_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
-    let mut spans = vec![
-        Span::styled(" esc", theme.title()),
-        Span::styled(" / ", theme.dim()),
-        Span::styled("×", theme.title()),
-        Span::styled("  home", theme.dim()),
-    ];
-    if view.surface == Surface::Glance && view.expanded != Some(Panel::Processes) {
-        spans.extend([
-            Span::styled("   ?", theme.title()),
-            Span::styled(" help", theme.dim()),
-            Span::styled("   w", theme.title()),
-            Span::styled(" processes", theme.dim()),
-            Span::styled("   q", theme.title()),
-            Span::styled(" quit", theme.dim()),
-        ]);
-        return Line::from(spans);
+    let mut spans = vec![];
+    if view.expanded.is_some() {
+        key(&mut spans, theme, "esc", "home");
+    } else {
+        key(&mut spans, theme, "?", "help");
+        if view.surface == Surface::Glance {
+            key(&mut spans, theme, "w", "work");
+        }
+        if process_actions_visible(view) {
+            key(&mut spans, theme, "/", "search");
+            key(&mut spans, theme, "x", "kill");
+        }
+        if view.frozen {
+            key(&mut spans, theme, "f", "paused");
+        }
     }
-    spans.push(Span::styled("  ", theme.dim()));
-    spans.extend(work_spans(theme, view.expanded == Some(Panel::Processes)));
+    key(&mut spans, theme, "q", "quit");
     Line::from(spans)
 }
 
-fn work_line(theme: &Theme, kill: bool) -> Line<'static> {
-    Line::from(work_spans(theme, kill))
+fn process_actions_visible(view: &AppView<'_>) -> bool {
+    !view.searching
+        && view.expanded.is_none()
+        && view.surface != Surface::Glance
+        && view.focus.panel() == Panel::Processes
 }
 
-fn work_spans(theme: &Theme, kill: bool) -> Vec<Span<'static>> {
-    let mut spans = vec![
-        Span::styled(" ?", theme.title()),
-        Span::styled(" help", theme.dim()),
-        Span::styled("   tab", theme.title()),
-        Span::styled(" box", theme.dim()),
-        Span::styled("   ↗", theme.title()),
-        Span::styled(" expand", theme.dim()),
-        Span::styled("   drag", theme.title()),
-        Span::styled(" resize", theme.dim()),
-        Span::styled("   /", theme.title()),
-        Span::styled(" search", theme.dim()),
-    ];
-    if kill {
-        spans.extend([
-            Span::styled("   x", theme.title()),
-            Span::styled(" kill", theme.dim()),
-        ]);
-    }
-    spans.extend([
-        Span::styled("   s", theme.title()),
-        Span::styled(" settings", theme.dim()),
-        Span::styled("   q", theme.title()),
-        Span::styled(" quit", theme.dim()),
-    ]);
-    spans
+fn key(spans: &mut Vec<Span<'static>>, theme: &Theme, k: &'static str, verb: &'static str) {
+    spans.push(Span::raw("  "));
+    spans.push(Span::styled(k.to_owned(), theme.title()));
+    spans.push(Span::styled(format!(" {verb}"), theme.dim()));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widgets::Focus;
     use crate::widgets::tests_support::fixture;
 
-    #[test]
-    fn work_footer_lists_verbs() {
-        let fx = fixture("");
-        let theme = Theme::default();
-        let text: String = footer_line(&fx.view(), &theme)
+    fn text(view: &AppView<'_>) -> String {
+        footer_line(view, &Theme::default())
             .spans
             .iter()
             .map(|s| s.content.as_ref())
-            .collect();
-        assert!(text.contains('?'));
-        assert!(text.contains('/'));
-        assert!(text.contains('x'));
-        assert!(text.contains('s'));
-        assert!(text.contains('q'));
-        assert!(text.contains('↗'), "{text}");
-        assert!(text.contains("expand"), "{text}");
+            .collect()
+    }
+
+    #[test]
+    fn work_footer_is_quiet_without_a_selection_context() {
+        let mut fx = fixture("");
+        fx.focus = crate::widgets::Focus::Cpu;
+        let t = text(&fx.view());
+        assert!(t.contains('?') && t.contains("help"), "{t}");
+        assert!(t.contains('q'), "{t}");
+        assert!(!t.contains("search"), "{t}");
+        assert!(!t.contains("kill"), "{t}");
+        assert!(!t.contains("expand"), "{t}");
+        assert!(!t.contains("resize"), "{t}");
+    }
+
+    #[test]
+    fn kill_chip_only_over_the_process_table() {
+        let mut fx = fixture("");
+        fx.focus = Focus::Processes;
+        let t = text(&fx.view());
+        assert!(t.contains("search") && t.contains("kill"), "{t}");
+        fx.focus = Focus::Mem;
+        assert!(!text(&fx.view()).contains("kill"));
+    }
+
+    #[test]
+    fn expanded_shows_home() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        let t = text(&fx.view());
+        assert!(t.contains("home"), "{t}");
+        assert!(!t.contains("kill"), "{t}");
+    }
+
+    #[test]
+    fn paused_chip_when_frozen() {
+        let mut fx = fixture("");
+        fx.frozen = true;
+        assert!(text(&fx.view()).contains("paused"));
     }
 
     #[test]
@@ -128,13 +121,8 @@ mod tests {
         let mut fx = fixture("");
         fx.confirm_kill = true;
         fx.proc.selected_pid = Some(904);
-        let theme = Theme::default();
-        let text: String = footer_line(&fx.view(), &theme)
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert!(text.contains("904"));
-        assert!(text.contains("yes"));
+        let t = text(&fx.view());
+        assert!(t.contains("904"));
+        assert!(t.contains("yes"));
     }
 }

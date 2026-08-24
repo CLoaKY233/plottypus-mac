@@ -1,4 +1,4 @@
-use plottypus_core::Surface;
+use plottypus_core::{PROC_RATIO_MAX, PROC_RATIO_MIN, Surface};
 use ratatui::layout::{Constraint, Layout, Rect};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,7 +61,7 @@ impl Default for LayoutFlags {
             has_fans: true,
             has_disk: true,
             expanded: None,
-            proc_ratio: 34,
+            proc_ratio: plottypus_core::PROC_RATIO_DEFAULT,
         }
     }
 }
@@ -298,7 +298,7 @@ fn glance_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
 }
 
 fn work_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
-    let ratio = flags.proc_ratio.clamp(22, 48);
+    let ratio = flags.proc_ratio.clamp(PROC_RATIO_MIN, PROC_RATIO_MAX);
     let proc_w = (u32::from(body.width) * u32::from(ratio) / 100) as u16;
     // keeps the clamp range from inverting below the gate
     let proc_w = proc_w.clamp(24, body.width.saturating_sub(36).max(24));

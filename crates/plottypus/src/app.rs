@@ -1,6 +1,9 @@
 use std::time::{Duration, Instant};
 
-use plottypus_core::{Config, History, Result, Snapshot, Surface, auto_surface};
+use plottypus_core::{
+    Config, History, PROC_RATIO_DEFAULT, PROC_RATIO_MAX, PROC_RATIO_MIN, Result, Snapshot, Surface,
+    auto_surface,
+};
 use plottypus_metrics::{Sampler, Signal, send_signal};
 use plottypus_ui::{
     AppView, Focus, Hit, LayoutFlags, Panel, ProcView, filtered_processes, hit_test, render_app,
@@ -64,7 +67,7 @@ struct App {
     frozen: bool,
     ready: bool,
     last_tick: Instant,
-    status: Option<String>,
+    status: Option<(String, Instant)>,
     last_area: ratatui::layout::Rect,
     proc_ratio: u16,
     dragging_split: bool,
@@ -104,7 +107,7 @@ impl App {
             last_tick: Instant::now(),
             status: None,
             last_area: ratatui::layout::Rect::new(0, 0, 80, 24),
-            proc_ratio: 34,
+            proc_ratio: PROC_RATIO_DEFAULT,
             dragging_split: false,
         })
     }
@@ -282,7 +285,7 @@ impl App {
         let proc_w = self.last_area.width.saturating_sub(col.saturating_add(1));
         let ratio =
             u16::try_from(u32::from(proc_w) * 100 / u32::from(self.last_area.width)).unwrap_or(34);
-        self.proc_ratio = ratio.clamp(22, 48);
+        self.proc_ratio = ratio.clamp(PROC_RATIO_MIN, PROC_RATIO_MAX);
     }
 
     fn handle_move(&mut self, delta: i32) {
@@ -407,7 +410,20 @@ impl App {
         self.confirm_pid = self.selected_pid();
         self.confirm_kill = self.confirm_pid.is_some();
         if !self.confirm_kill {
-            self.status = Some(String::from("no process selected"));
+            self.set_status(String::from("no process selected"));
+        }
+    }
+
+    fn set_status(&mut self, message: String) {
+        self.status = Some((message, Instant::now()));
+    }
+
+    fn live_status(&self) -> Option<&str> {
+        let (message, at) = self.status.as_ref()?;
+        if at.elapsed() < Duration::from_secs(4) {
+            Some(message)
+        } else {
+            None
         }
     }
 
@@ -421,8 +437,8 @@ impl App {
             Event::ConfirmYes => {
                 if let Some(pid) = self.confirm_pid.take() {
                     match send_signal(pid, Signal::Term) {
-                        Ok(()) => self.status = Some(format!("sent TERM to {pid}")),
-                        Err(err) => self.status = Some(err.to_string()),
+                        Ok(()) => self.set_status(format!("sent TERM to {pid}")),
+                        Err(err) => self.set_status(err.to_string()),
                     }
                 }
                 self.confirm_kill = false;
@@ -524,7 +540,7 @@ impl App {
             expanded: self.expanded,
             proc_ratio: self.proc_ratio,
             interval_ms: u64::try_from(self.config.interval.as_millis()).unwrap_or(1000),
-            status: self.status.as_deref(),
+            status: self.live_status(),
         }
     }
 

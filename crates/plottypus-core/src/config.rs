@@ -45,7 +45,12 @@ pub struct Config {
     pub show_cores: bool,
     pub show_threads: bool,
     pub proc_sort: ProcSort,
+    pub proc_ratio: u16,
 }
+
+pub const PROC_RATIO_MIN: u16 = 35;
+pub const PROC_RATIO_MAX: u16 = 72;
+pub const PROC_RATIO_DEFAULT: u16 = 55;
 
 impl Default for Config {
     fn default() -> Self {
@@ -53,12 +58,13 @@ impl Default for Config {
             interval: INTERVAL_DEFAULT,
             surface: None,
             show_gpu: true,
-            show_net: true,
-            show_disk: true,
+            show_net: false,
+            show_disk: false,
             show_fans: true,
             show_cores: true,
             show_threads: false,
             proc_sort: ProcSort::Cpu,
+            proc_ratio: PROC_RATIO_DEFAULT,
         }
     }
 }
