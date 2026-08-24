@@ -318,12 +318,9 @@ impl App {
                 self.focus = Focus::Processes;
                 let rows = self.visible();
                 if let Some(proc) = rows.get(idx) {
-                    if self.proc.selected_pid == Some(proc.pid) {
-                        self.detail_pid = Some(proc.pid);
-                    } else {
-                        self.proc.selected_pid = Some(proc.pid);
-                        self.proc.selected = idx;
-                    }
+                    self.proc.selected_pid = Some(proc.pid);
+                    self.proc.selected = idx;
+                    self.detail_pid = Some(proc.pid);
                 }
             }
             Some(Hit::Panel(panel)) => {
@@ -647,10 +644,16 @@ mod tests {
             threads: 1,
             gpu: 0.0,
         }];
-        app.proc.selected_pid = Some(7);
-        app.proc.selected = 0;
         app.focus = Focus::Processes;
-        app.handle(Event::Expand).unwrap();
+        app.last_area = ratatui::layout::Rect::new(0, 0, 120, 30);
+        let planned = plan(app.last_area, Surface::Work, app.layout_flags());
+        let proc = planned.processes.unwrap_or_default();
+        app.handle(Event::Click {
+            col: proc.x + 2,
+            row: proc.y + 3,
+        })
+        .unwrap();
+        assert_eq!(app.proc.selected_pid, Some(7));
         assert_eq!(app.detail_pid, Some(7));
         app.handle(Event::FilterCancel).unwrap();
         assert!(app.detail_pid.is_none());
