@@ -90,4 +90,14 @@ mod tests {
         let r = centered(Rect::new(0, 0, 20, 10), 40, 20);
         assert_eq!(r, Rect::new(0, 0, 20, 10));
     }
+
+    #[test]
+    fn help_lists_button_and_enter_expand() {
+        let joined = HELP.join("\n");
+        assert!(joined.contains("enter                    expand focused box"));
+        assert!(joined.contains("click ↗                  expand that box"));
+        assert!(joined.contains("click a box              focus it"));
+        assert!(!joined.contains("click a box              expand"));
+        assert!(!joined.contains("fullscreen"));
+    }
 }

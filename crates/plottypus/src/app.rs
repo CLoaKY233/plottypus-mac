@@ -490,6 +490,7 @@ impl App {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use plottypus_ui::{LayoutPlan, plan};
 
     #[test]
     fn new_app_loads() {
@@ -561,6 +562,28 @@ mod tests {
         app.snapshot.processes[1].cpu = 1.0;
         app.sync_selection();
         assert_eq!(app.proc.selected_pid, Some(1));
+    }
+
+    #[test]
+    fn click_box_focuses_without_expand() {
+        let mut app = App::new().unwrap();
+        app.last_area = ratatui::layout::Rect::new(0, 0, 120, 30);
+        let planned = plan(app.last_area, Surface::Work, app.layout_flags());
+        let cpu = planned.cpu.unwrap_or_default();
+        app.handle(Event::Click {
+            col: cpu.x + 2,
+            row: cpu.y + 1,
+        })
+        .unwrap();
+        assert_eq!(app.focus, Focus::Cpu);
+        assert!(app.expanded.is_none());
+        let corner = LayoutPlan::corner_hit(cpu).unwrap_or_default();
+        app.handle(Event::Click {
+            col: corner.x,
+            row: corner.y,
+        })
+        .unwrap();
+        assert_eq!(app.expanded, Some(Panel::Cpu));
     }
 
     #[test]

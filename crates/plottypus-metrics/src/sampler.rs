@@ -7,6 +7,17 @@ use crate::net::NetCollector;
 use crate::process::ProcessCollector;
 use crate::{gpu, memory, soc, thermal};
 
+fn fill_missing_temps(snap: &mut Snapshot) {
+    if snap.cpu.temp_c.is_none() {
+        snap.cpu.temp_c = snap.sensors.cpu_c.or(snap.sensors.hotspot_c);
+    }
+    if let Some(gpu) = snap.gpu.as_mut()
+        && gpu.temp_c.is_none()
+    {
+        gpu.temp_c = snap.sensors.gpu_c;
+    }
+}
+
 pub struct Sampler {
     soc: SocInfo,
     cpu: CpuCollector,
@@ -38,14 +49,7 @@ impl Sampler {
         snap.disk = self.disk.sample();
         snap.fans = self.fans.sample();
         snap.sensors = self.fans.sample_sensors();
-        if snap.cpu.temp_c.is_none() {
-            snap.cpu.temp_c = snap.sensors.cpu_c.or(snap.sensors.hotspot_c);
-        }
-        if let Some(gpu) = snap.gpu.as_mut()
-            && gpu.temp_c.is_none()
-        {
-            gpu.temp_c = snap.sensors.gpu_c;
-        }
+        fill_missing_temps(&mut snap);
         snap.processes = self.processes.sample()?;
         snap.thermal = thermal::sample();
         Ok(snap)
@@ -62,6 +66,27 @@ mod tests {
         let mut sampler = Sampler::new().expect("sampler");
         let snap = sampler.tick().expect("tick");
         assert!(!snap.soc.name.is_empty());
+    }
+
+    #[test]
+    fn fills_gpu_temp_from_sensors() {
+        let mut snap = Snapshot::empty();
+        snap.gpu = Some(plottypus_core::GpuSnapshot::default());
+        snap.sensors.gpu_c = Some(47.0);
+        fill_missing_temps(&mut snap);
+        assert_eq!(snap.gpu.and_then(|g| g.temp_c), Some(47.0));
+    }
+
+    #[test]
+    fn keeps_existing_gpu_temp() {
+        let mut snap = Snapshot::empty();
+        snap.gpu = Some(plottypus_core::GpuSnapshot {
+            temp_c: Some(51.0),
+            ..plottypus_core::GpuSnapshot::default()
+        });
+        snap.sensors.gpu_c = Some(47.0);
+        fill_missing_temps(&mut snap);
+        assert_eq!(snap.gpu.and_then(|g| g.temp_c), Some(51.0));
     }
 
     #[cfg(target_os = "macos")]

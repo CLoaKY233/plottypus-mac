@@ -119,6 +119,8 @@ mod tests {
         assert!(text.contains('x'));
         assert!(text.contains('s'));
         assert!(text.contains('q'));
+        assert!(text.contains('↗'), "{text}");
+        assert!(text.contains("expand"), "{text}");
     }
 
     #[test]

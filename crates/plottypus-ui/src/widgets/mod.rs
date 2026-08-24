@@ -306,6 +306,7 @@ mod render_tests {
             scaled: 0.12,
             watts: Some(1.1),
             freq_mhz: Some(461),
+            temp_c: Some(51.0),
             ..GpuSnapshot::default()
         });
         fx.snap.disk = DiskSnapshot {
@@ -330,6 +331,8 @@ mod render_tests {
         assert!(text.contains("cpu"), "{text}");
         assert!(text.contains("18%"), "{text}");
         assert!(text.contains("gpu"), "{text}");
+        assert!(text.contains("51°"), "{text}");
+        assert!(text.contains('↗'), "{text}");
         assert!(text.contains("mem"), "{text}");
         assert!(text.contains("net"), "{text}");
         assert!(text.contains("disk"), "{text}");
@@ -401,5 +404,8 @@ mod render_tests {
         assert!(text.contains("search"), "{text}");
         assert!(text.contains("kill"), "{text}");
         assert!(text.contains("settings"), "{text}");
+        assert!(text.contains("expand"), "{text}");
+        assert!(text.contains("focus"), "{text}");
+        assert!(text.contains('↗'), "{text}");
     }
 }
