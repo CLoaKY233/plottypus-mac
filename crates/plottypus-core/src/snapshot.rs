@@ -7,6 +7,28 @@ pub enum ClusterKind {
     Super,
 }
 
+impl ClusterKind {
+    pub const ALL: [Self; 3] = [Self::Efficiency, Self::Performance, Self::Super];
+
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::Efficiency => "E",
+            Self::Performance => "P",
+            Self::Super => "S",
+        }
+    }
+
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Efficiency => "efficiency",
+            Self::Performance => "performance",
+            Self::Super => "super",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cluster {
     pub kind: ClusterKind,
@@ -165,13 +187,59 @@ pub struct SensorsSnapshot {
     pub cpu_c: Option<f32>,
     pub gpu_c: Option<f32>,
     pub hotspot_c: Option<f32>,
+    pub e_c: Option<f32>,
+    pub p_c: Option<f32>,
+    pub s_c: Option<f32>,
     pub readings: Vec<TempReading>,
 }
 
 impl SensorsSnapshot {
     #[must_use]
     pub fn is_present(&self) -> bool {
-        self.cpu_c.is_some() || self.gpu_c.is_some() || !self.readings.is_empty()
+        self.cpu_c.is_some()
+            || self.gpu_c.is_some()
+            || self.e_c.is_some()
+            || self.p_c.is_some()
+            || self.s_c.is_some()
+            || !self.readings.is_empty()
+    }
+
+    #[must_use]
+    pub fn zone_temp(&self, kind: ClusterKind) -> Option<f32> {
+        match kind {
+            ClusterKind::Efficiency => self.e_c,
+            ClusterKind::Performance => self.p_c,
+            ClusterKind::Super => self.s_c,
+        }
+    }
+
+    #[must_use]
+    pub fn best_cpu_c(&self) -> Option<f32> {
+        self.cpu_c
+            .or_else(|| mean_opts(&[self.e_c, self.p_c, self.s_c]))
+            .or(self.hotspot_c)
+    }
+
+    pub fn set_zone_temp(&mut self, kind: ClusterKind, temp: f32) {
+        match kind {
+            ClusterKind::Efficiency => self.e_c = Some(temp),
+            ClusterKind::Performance => self.p_c = Some(temp),
+            ClusterKind::Super => self.s_c = Some(temp),
+        }
+    }
+}
+
+fn mean_opts(values: &[Option<f32>]) -> Option<f32> {
+    let mut sum = 0.0_f32;
+    let mut n = 0_u32;
+    for value in values.iter().flatten() {
+        sum += *value;
+        n += 1;
+    }
+    if n == 0 {
+        None
+    } else {
+        Some(sum / n as f32)
     }
 }
 
@@ -213,6 +281,8 @@ pub struct SocInfo {
     pub s_cores: u8,
     pub gpu_cores: u8,
     pub memory_bytes: u64,
+    /// Mach index → cluster, from `IORegistry` `cluster-type`. Empty if unknown.
+    pub core_kinds: Vec<ClusterKind>,
 }
 
 impl Default for SocInfo {
@@ -224,8 +294,73 @@ impl Default for SocInfo {
             s_cores: 0,
             gpu_cores: 0,
             memory_bytes: 0,
+            core_kinds: Vec::new(),
         }
     }
+}
+
+impl SocInfo {
+    /// Cluster and local index for Mach core `mach_index`.
+    /// Prefers `core_kinds`. Falls back to E then P then S when counts cover `total`.
+    #[must_use]
+    pub fn role_for(&self, mach_index: usize, total: usize) -> Option<(ClusterKind, u16)> {
+        role_for_core(
+            &self.core_kinds,
+            self.e_cores,
+            self.p_cores,
+            self.s_cores,
+            mach_index,
+            total,
+        )
+    }
+}
+
+/// Apple Silicon Mach order when `IORegistry` is missing: E, then P, then S.
+#[must_use]
+pub fn linear_core_role(
+    e_cores: u8,
+    p_cores: u8,
+    s_cores: u8,
+    mach_index: usize,
+    total: usize,
+) -> Option<(ClusterKind, u16)> {
+    let e = usize::from(e_cores);
+    let p = usize::from(p_cores);
+    let s = usize::from(s_cores);
+    if e + p + s != total || mach_index >= total {
+        return None;
+    }
+    if mach_index < e {
+        Some((ClusterKind::Efficiency, mach_index as u16))
+    } else if mach_index < e + p {
+        Some((ClusterKind::Performance, (mach_index - e) as u16))
+    } else {
+        Some((ClusterKind::Super, (mach_index - e - p) as u16))
+    }
+}
+
+#[must_use]
+pub fn role_for_core(
+    core_kinds: &[ClusterKind],
+    e_cores: u8,
+    p_cores: u8,
+    s_cores: u8,
+    mach_index: usize,
+    total: usize,
+) -> Option<(ClusterKind, u16)> {
+    if total == 0 || mach_index >= total {
+        return None;
+    }
+    if core_kinds.len() == total {
+        let kind = *core_kinds.get(mach_index)?;
+        let index = core_kinds
+            .iter()
+            .take(mach_index)
+            .filter(|k| **k == kind)
+            .count() as u16;
+        return Some((kind, index));
+    }
+    linear_core_role(e_cores, p_cores, s_cores, mach_index, total)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -327,5 +462,62 @@ mod tests {
         };
         assert!(fans.is_present());
         assert!((fans.peak_ratio() - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn linear_roles_are_e_then_p_then_s() {
+        assert_eq!(
+            linear_core_role(4, 8, 0, 0, 12),
+            Some((ClusterKind::Efficiency, 0))
+        );
+        assert_eq!(
+            linear_core_role(4, 8, 0, 3, 12),
+            Some((ClusterKind::Efficiency, 3))
+        );
+        assert_eq!(
+            linear_core_role(4, 8, 0, 4, 12),
+            Some((ClusterKind::Performance, 0))
+        );
+        assert_eq!(
+            linear_core_role(0, 12, 6, 11, 18),
+            Some((ClusterKind::Performance, 11))
+        );
+        assert_eq!(
+            linear_core_role(0, 12, 6, 12, 18),
+            Some((ClusterKind::Super, 0))
+        );
+        assert_eq!(linear_core_role(4, 8, 0, 0, 10), None);
+    }
+
+    #[test]
+    fn registry_kinds_win_over_linear() {
+        let kinds = vec![
+            ClusterKind::Performance,
+            ClusterKind::Performance,
+            ClusterKind::Super,
+        ];
+        assert_eq!(
+            role_for_core(&kinds, 4, 8, 0, 2, 3),
+            Some((ClusterKind::Super, 0))
+        );
+        assert_eq!(
+            role_for_core(&kinds, 4, 8, 0, 1, 3),
+            Some((ClusterKind::Performance, 1))
+        );
+    }
+
+    #[test]
+    fn zone_temp_and_best_cpu() {
+        let mut sensors = SensorsSnapshot {
+            e_c: Some(36.0),
+            p_c: Some(48.0),
+            ..SensorsSnapshot::default()
+        };
+        assert_eq!(sensors.zone_temp(ClusterKind::Efficiency), Some(36.0));
+        assert_eq!(sensors.zone_temp(ClusterKind::Super), None);
+        let best = sensors.best_cpu_c().unwrap_or(0.0);
+        assert!((best - 42.0).abs() < f32::EPSILON);
+        sensors.cpu_c = Some(40.0);
+        assert_eq!(sensors.best_cpu_c(), Some(40.0));
     }
 }

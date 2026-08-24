@@ -1,4 +1,6 @@
-use plottypus_core::{Scale, Thermal, percent_display, watts_display};
+use plottypus_core::{
+    ClusterKind, CoreSample, History, Scale, Thermal, percent_display, watts_display,
+};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
@@ -58,12 +60,12 @@ fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Th
     header.push(stat_line(view, theme));
     let header_h = u16::try_from(header.len()).unwrap_or(1).min(area.height);
     let remain = area.height.saturating_sub(header_h);
-    let has_detail = !view.snapshot.cpu.cores.is_empty() || !view.snapshot.processes.is_empty();
+    let has_detail = has_zone_detail(view) || !view.snapshot.processes.is_empty();
     let rows = if has_detail && remain >= 6 {
         Layout::vertical([
             Constraint::Length(header_h),
             Constraint::Fill(1),
-            Constraint::Fill(1),
+            Constraint::Fill(2),
         ])
         .split(area)
     } else {
@@ -85,23 +87,198 @@ fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Th
 }
 
 fn render_expanded_detail(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let has_cores = !view.snapshot.cpu.cores.is_empty();
+    let zones = cpu_zones(view);
+    let has_zones = !zones.is_empty();
     let has_procs = !view.snapshot.processes.is_empty();
-    match (has_cores, has_procs) {
-        (true, true) if area.width >= 48 => {
+    match (has_zones, has_procs) {
+        (true, true) if area.width >= 52 => {
             let cols = Layout::horizontal([Constraint::Fill(3), Constraint::Fill(2)]).split(area);
-            render_core_list(frame, cols[0], view, theme);
+            render_zone_row(frame, cols[0], &zones, view, theme);
             render_top_procs(frame, cols[1], view, theme);
         }
         (true, true) => {
-            let rows = Layout::vertical([Constraint::Fill(1), Constraint::Fill(1)]).split(area);
-            render_core_list(frame, rows[0], view, theme);
+            let rows = Layout::vertical([Constraint::Fill(2), Constraint::Fill(1)]).split(area);
+            render_zone_row(frame, rows[0], &zones, view, theme);
             render_top_procs(frame, rows[1], view, theme);
         }
-        (true, false) => render_core_list(frame, area, view, theme),
+        (true, false) => render_zone_row(frame, area, &zones, view, theme),
         (false, true) => render_top_procs(frame, area, view, theme),
         (false, false) => {}
     }
+}
+
+struct ZoneCard<'a> {
+    kind: ClusterKind,
+    solo: bool,
+    load: f32,
+    temp: Option<f32>,
+    cores: Vec<CoreSample>,
+    history: Option<&'a History>,
+}
+
+fn has_zone_detail(view: &AppView<'_>) -> bool {
+    !view.snapshot.cpu.cores.is_empty()
+        || view.snapshot.sensors.e_c.is_some()
+        || view.snapshot.sensors.p_c.is_some()
+        || view.snapshot.sensors.s_c.is_some()
+}
+
+fn cpu_zones<'a>(view: &'a AppView<'_>) -> Vec<ZoneCard<'a>> {
+    let cores = &view.snapshot.cpu.cores;
+    let mut kinds: Vec<ClusterKind> = ClusterKind::ALL
+        .into_iter()
+        .filter(|kind| {
+            cores.iter().any(|c| c.kind == *kind) || view.snapshot.sensors.zone_temp(*kind).is_some()
+        })
+        .collect();
+    let solo = kinds.len() <= 1;
+    if kinds.is_empty() && !cores.is_empty() {
+        kinds.push(ClusterKind::Performance);
+    }
+    let mut zones: Vec<ZoneCard<'a>> = kinds
+        .into_iter()
+        .map(|kind| zone_card(view, kind, solo, cores))
+        .collect();
+    if !solo
+        && zones.iter().all(|z| z.temp.is_none())
+        && let Some(temp) = view.snapshot.cpu.temp_c.or(view.snapshot.sensors.best_cpu_c())
+    {
+        zones.push(ZoneCard {
+            kind: ClusterKind::Performance,
+            solo: true,
+            load: view.snapshot.cpu.active,
+            temp: Some(temp),
+            cores: Vec::new(),
+            history: nonempty(view.cpu_temp_history),
+        });
+    }
+    zones
+}
+
+fn zone_card<'a>(
+    view: &'a AppView<'_>,
+    kind: ClusterKind,
+    solo: bool,
+    cores: &[CoreSample],
+) -> ZoneCard<'a> {
+    let zone_cores: Vec<CoreSample> = cores.iter().copied().filter(|c| c.kind == kind).collect();
+    let load = cluster_load(view, kind).unwrap_or_else(|| mean_active(&zone_cores));
+    let temp = if solo {
+        view.snapshot
+            .sensors
+            .zone_temp(kind)
+            .or(view.snapshot.cpu.temp_c)
+            .or(view.snapshot.sensors.best_cpu_c())
+    } else {
+        view.snapshot.sensors.zone_temp(kind)
+    };
+    let history = if solo {
+        nonempty(view.cpu_temp_history).or_else(|| nonempty(view.zone_temp_history(kind)))
+    } else {
+        nonempty(view.zone_temp_history(kind))
+    };
+    ZoneCard {
+        kind,
+        solo,
+        load,
+        temp,
+        cores: zone_cores,
+        history,
+    }
+}
+
+fn cluster_load(view: &AppView<'_>, kind: ClusterKind) -> Option<f32> {
+    let cluster = match kind {
+        ClusterKind::Efficiency => view.snapshot.cpu.e_cluster,
+        ClusterKind::Performance => view.snapshot.cpu.p_cluster,
+        ClusterKind::Super => view.snapshot.cpu.s_cluster,
+    };
+    cluster.map(|c| c.active)
+}
+
+fn mean_active(cores: &[CoreSample]) -> f32 {
+    if cores.is_empty() {
+        0.0
+    } else {
+        cores.iter().map(|c| c.active).sum::<f32>() / cores.len() as f32
+    }
+}
+
+fn nonempty(history: &History) -> Option<&History> {
+    if history.is_empty() {
+        None
+    } else {
+        Some(history)
+    }
+}
+
+fn render_zone_row(
+    frame: &mut Frame,
+    area: Rect,
+    zones: &[ZoneCard<'_>],
+    view: &AppView<'_>,
+    theme: &Theme,
+) {
+    if area.width == 0 || area.height == 0 || zones.is_empty() {
+        return;
+    }
+    let constraints: Vec<Constraint> = zones.iter().map(|_| Constraint::Fill(1)).collect();
+    let cols = Layout::horizontal(constraints).split(area);
+    for (zone, col) in zones.iter().zip(cols.iter().copied()) {
+        render_zone_card(frame, col, zone, view, theme);
+    }
+}
+
+fn render_zone_card(
+    frame: &mut Frame,
+    area: Rect,
+    zone: &ZoneCard<'_>,
+    view: &AppView<'_>,
+    theme: &Theme,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let show_cores = view.show_cores && !zone.cores.is_empty();
+    let show_graph = zone.history.is_some() && area.height >= 5;
+    let mut parts = vec![Constraint::Length(1)];
+    if show_graph {
+        parts.push(Constraint::Fill(1));
+    }
+    if show_cores {
+        parts.push(Constraint::Fill(1));
+    }
+    let rows = Layout::vertical(parts).split(area);
+    frame.render_widget(Paragraph::new(zone_title(zone, theme)), rows[0]);
+    let mut i = 1;
+    if show_graph && let Some(history) = zone.history {
+        render_scaled_graph(
+            frame,
+            rows[i],
+            history,
+            theme.temp,
+            theme,
+            Scale::Fixed(100.0),
+            Axis::Celsius,
+        );
+        i += 1;
+    }
+    if show_cores && let Some(row) = rows.get(i) {
+        render_core_list(frame, *row, &zone.cores, zone.solo, theme);
+    }
+}
+
+fn zone_title(zone: &ZoneCard<'_>, theme: &Theme) -> Line<'static> {
+    let name = if zone.solo { "cpu" } else { zone.kind.word() };
+    let mut parts = vec![
+        Span::styled(format!(" {name}  "), theme.dim()),
+        Span::styled(percent_display(zone.load), theme.title()),
+    ];
+    if let Some(temp) = zone.temp {
+        parts.push(Span::styled("  ", theme.dim()));
+        parts.push(Span::styled(format!("{temp:.0}°"), theme.temp()));
+    }
+    Line::from(parts)
 }
 
 fn stat_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
@@ -155,8 +332,13 @@ fn truncate(name: &str, width: usize) -> String {
     out
 }
 
-fn render_core_list(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let cores = &view.snapshot.cpu.cores;
+fn render_core_list(
+    frame: &mut Frame,
+    area: Rect,
+    cores: &[CoreSample],
+    solo: bool,
+    theme: &Theme,
+) {
     if area.width == 0 || area.height == 0 || cores.is_empty() {
         return;
     }
@@ -165,22 +347,14 @@ fn render_core_list(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &T
     let col_w = (usize::from(area.width) / cols_n).max(1);
     let mut rows: Vec<Vec<Span>> = vec![Vec::new(); rows_n];
     for (i, core) in cores.iter().take(rows_n.saturating_mul(cols_n)).enumerate() {
-        rows[i % rows_n].extend(core_spans(core, col_w, theme));
+        rows[i % rows_n].extend(core_spans(core, col_w, solo, theme));
     }
     let lines: Vec<Line> = rows.into_iter().map(Line::from).collect();
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn core_spans(
-    core: &plottypus_core::CoreSample,
-    width: usize,
-    theme: &Theme,
-) -> Vec<Span<'static>> {
-    let tag = match core.kind {
-        plottypus_core::ClusterKind::Efficiency => "E",
-        plottypus_core::ClusterKind::Performance => "P",
-        plottypus_core::ClusterKind::Super => "S",
-    };
+fn core_spans(core: &CoreSample, width: usize, solo: bool, theme: &Theme) -> Vec<Span<'static>> {
+    let tag = if solo { "C" } else { core.kind.tag() };
     let label = format!(" {tag}{:<2} ", core.index);
     let pct = format!(" {:>4}", percent_display(core.active));
     let meter_w = width.saturating_sub(label.chars().count() + pct.chars().count());
@@ -229,7 +403,11 @@ fn spec_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     if !name.is_empty() {
         spans.push(Span::styled(format!(" {name}  "), theme.fg()));
     }
-    if let Some(cores) = core_label(view.snapshot.soc.e_cores, view.snapshot.soc.p_cores) {
+    if let Some(cores) = core_label(
+        view.snapshot.soc.e_cores,
+        view.snapshot.soc.p_cores,
+        view.snapshot.soc.s_cores,
+    ) {
         spans.push(Span::styled(format!("{cores}  "), theme.dim()));
     }
     if let Some(mhz) = view.snapshot.cpu.freq_mhz.filter(|mhz| *mhz > 0) {
@@ -249,12 +427,21 @@ fn ready_pct(ready: bool, ratio: f32) -> String {
     }
 }
 
-fn core_label(e_cores: u8, p_cores: u8) -> Option<String> {
-    match (e_cores, p_cores) {
-        (0, 0) => None,
-        (e, 0) => Some(format!("{e}E")),
-        (0, p) => Some(format!("{p}P")),
-        (e, p) => Some(format!("{e}E + {p}P")),
+fn core_label(e_cores: u8, p_cores: u8, s_cores: u8) -> Option<String> {
+    let mut parts = Vec::new();
+    if e_cores > 0 {
+        parts.push(format!("{e_cores}E"));
+    }
+    if p_cores > 0 {
+        parts.push(format!("{p_cores}P"));
+    }
+    if s_cores > 0 {
+        parts.push(format!("{s_cores}S"));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" + "))
     }
 }
 
@@ -282,8 +469,9 @@ fn line_has_text(line: &Line<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::Panel;
     use crate::widgets::tests_support::fixture;
-    use plottypus_core::Thermal;
+    use plottypus_core::{ClusterKind, CoreSample, Thermal};
 
     fn line_text(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
@@ -355,15 +543,73 @@ mod tests {
 
     #[test]
     fn core_label_omits_zeros() {
-        assert_eq!(core_label(4, 8).as_deref(), Some("4E + 8P"));
-        assert_eq!(core_label(4, 0).as_deref(), Some("4E"));
-        assert_eq!(core_label(0, 8).as_deref(), Some("8P"));
-        assert_eq!(core_label(0, 0), None);
+        assert_eq!(core_label(4, 8, 0).as_deref(), Some("4E + 8P"));
+        assert_eq!(core_label(4, 0, 0).as_deref(), Some("4E"));
+        assert_eq!(core_label(0, 8, 0).as_deref(), Some("8P"));
+        assert_eq!(core_label(0, 12, 6).as_deref(), Some("12P + 6S"));
+        assert_eq!(core_label(0, 0, 0), None);
     }
 
     #[test]
     fn ready_pct_matches_header() {
         assert_eq!(ready_pct(false, 0.5), "…");
         assert_eq!(ready_pct(true, 0.184), "18%");
+    }
+
+    #[test]
+    fn clustered_zones_keep_temps_off_cores() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        fx.snap.cpu.cores = vec![
+            CoreSample {
+                kind: ClusterKind::Efficiency,
+                index: 0,
+                scaled: 0.2,
+                active: 0.2,
+            },
+            CoreSample {
+                kind: ClusterKind::Performance,
+                index: 0,
+                scaled: 0.8,
+                active: 0.8,
+            },
+        ];
+        fx.snap.sensors.e_c = Some(36.0);
+        fx.snap.sensors.p_c = Some(51.0);
+        let view = fx.view();
+        let zones = cpu_zones(&view);
+        assert_eq!(zones.len(), 2);
+        assert!(!zones[0].solo);
+        assert_eq!(zones[0].kind, ClusterKind::Efficiency);
+        assert_eq!(zones[0].temp, Some(36.0));
+        assert_eq!(zones[1].temp, Some(51.0));
+        let title = line_text(&zone_title(&zones[0], &Theme::default()));
+        assert!(title.contains("efficiency"), "{title}");
+        assert!(title.contains("36°"), "{title}");
+        assert!(title.contains("20%"), "{title}");
+    }
+
+    #[test]
+    fn unmapped_cores_are_cpu_not_fake_p() {
+        let mut fx = fixture("");
+        fx.snap.cpu.cores = vec![CoreSample {
+            kind: ClusterKind::Performance,
+            index: 0,
+            scaled: 0.4,
+            active: 0.4,
+        }];
+        fx.snap.cpu.temp_c = Some(42.0);
+        let view = fx.view();
+        let zones = cpu_zones(&view);
+        assert_eq!(zones.len(), 1);
+        assert!(zones[0].solo);
+        let title = line_text(&zone_title(&zones[0], &Theme::default()));
+        assert!(title.contains("cpu"), "{title}");
+        assert!(title.contains("42°"), "{title}");
+        let spans = core_spans(&zones[0].cores[0], 16, true, &Theme::default());
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("C0"), "{text}");
+        assert!(!text.contains("P0"), "{text}");
+        assert!(!text.contains('°'), "{text}");
     }
 }

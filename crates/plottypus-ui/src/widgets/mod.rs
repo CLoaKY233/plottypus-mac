@@ -74,6 +74,9 @@ pub struct AppView<'a> {
     pub disk_history: &'a History,
     pub cpu_temp_history: &'a History,
     pub gpu_temp_history: &'a History,
+    pub e_temp_history: &'a History,
+    pub p_temp_history: &'a History,
+    pub s_temp_history: &'a History,
     pub surface: Surface,
     pub focus: Focus,
     pub proc: &'a ProcView,
@@ -121,6 +124,15 @@ impl AppView<'_> {
     #[must_use]
     pub fn is_expanded(&self, panel: Panel) -> bool {
         self.expanded == Some(panel)
+    }
+
+    #[must_use]
+    pub fn zone_temp_history(&self, kind: plottypus_core::ClusterKind) -> &History {
+        match kind {
+            plottypus_core::ClusterKind::Efficiency => self.e_temp_history,
+            plottypus_core::ClusterKind::Performance => self.p_temp_history,
+            plottypus_core::ClusterKind::Super => self.s_temp_history,
+        }
     }
 }
 
@@ -186,6 +198,9 @@ pub(crate) mod tests_support {
         pub disk: History,
         pub cpu_temp: History,
         pub gpu_temp: History,
+        pub e_temp: History,
+        pub p_temp: History,
+        pub s_temp: History,
         pub proc: ProcView,
         pub surface: Surface,
         pub focus: Focus,
@@ -228,6 +243,9 @@ pub(crate) mod tests_support {
             disk: History::default(),
             cpu_temp: History::default(),
             gpu_temp: History::default(),
+            e_temp: History::default(),
+            p_temp: History::default(),
+            s_temp: History::default(),
             proc: ProcView {
                 filter: filter.to_owned(),
                 ..ProcView::default()
@@ -256,6 +274,9 @@ pub(crate) mod tests_support {
                 disk_history: &self.disk,
                 cpu_temp_history: &self.cpu_temp,
                 gpu_temp_history: &self.gpu_temp,
+                e_temp_history: &self.e_temp,
+                p_temp_history: &self.p_temp,
+                s_temp_history: &self.s_temp,
                 surface: self.surface,
                 focus: self.focus,
                 proc: &self.proc,
@@ -413,11 +434,13 @@ mod render_tests {
             },
             CoreSample {
                 kind: ClusterKind::Performance,
-                index: 4,
+                index: 0,
                 scaled: 0.8,
                 active: 0.8,
             },
         ];
+        fx.snap.sensors.e_c = Some(36.0);
+        fx.snap.sensors.p_c = Some(51.0);
         let text = paint(&fx.view(), 80, 24);
         assert!(text.contains("cpu"), "{text}");
         assert!(
@@ -425,8 +448,12 @@ mod render_tests {
             "{text}"
         );
         assert!(text.contains("busiest"), "{text}");
+        assert!(text.contains("efficiency"), "{text}");
+        assert!(text.contains("performance"), "{text}");
         assert!(text.contains("E0"), "{text}");
-        assert!(text.contains("P4"), "{text}");
+        assert!(text.contains("P0"), "{text}");
+        assert!(text.contains("36°"), "{text}");
+        assert!(text.contains("51°"), "{text}");
         assert!(text.contains("Xcode"), "{text}");
         assert!(!text.contains("Macintosh"), "{text}");
     }

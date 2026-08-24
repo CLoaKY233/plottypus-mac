@@ -12,6 +12,6 @@ pub use history::{History, Scale, nice_ceiling};
 pub use snapshot::{
     Cluster, ClusterKind, CoreSample, CpuSnapshot, DiskSnapshot, DiskVolume, FanMetric,
     FanSnapshot, GpuSnapshot, MemorySnapshot, NetworkSnapshot, Pressure, Process, SensorsSnapshot,
-    Snapshot, SocInfo, TempReading, Thermal,
+    Snapshot, SocInfo, TempReading, Thermal, linear_core_role, role_for_core,
 };
 pub use surface::{Surface, WORK_MIN_COLS, WORK_MIN_ROWS, auto_surface};

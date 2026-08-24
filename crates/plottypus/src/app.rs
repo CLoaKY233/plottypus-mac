@@ -48,6 +48,9 @@ struct App {
     disk_history: History,
     cpu_temp_history: History,
     gpu_temp_history: History,
+    e_temp_history: History,
+    p_temp_history: History,
+    s_temp_history: History,
     surface: Surface,
     focus: Focus,
     expanded: Option<Panel>,
@@ -83,6 +86,9 @@ impl App {
             disk_history: History::default(),
             cpu_temp_history: History::default(),
             gpu_temp_history: History::default(),
+            e_temp_history: History::default(),
+            p_temp_history: History::default(),
+            s_temp_history: History::default(),
             surface: Surface::Work,
             focus: Focus::Processes,
             expanded: None,
@@ -142,7 +148,7 @@ impl App {
             self.snapshot
                 .cpu
                 .temp_c
-                .or(self.snapshot.sensors.cpu_c)
+                .or(self.snapshot.sensors.best_cpu_c())
                 .unwrap_or(0.0),
         );
         self.gpu_temp_history.push(
@@ -152,6 +158,9 @@ impl App {
                 .or(self.snapshot.sensors.gpu_c)
                 .unwrap_or(0.0),
         );
+        push_temp(&mut self.e_temp_history, self.snapshot.sensors.e_c);
+        push_temp(&mut self.p_temp_history, self.snapshot.sensors.p_c);
+        push_temp(&mut self.s_temp_history, self.snapshot.sensors.s_c);
         self.ready = true;
         self.last_tick = Instant::now();
         self.proc.selected_pid = keep_pid;
@@ -493,6 +502,9 @@ impl App {
             disk_history: &self.disk_history,
             cpu_temp_history: &self.cpu_temp_history,
             gpu_temp_history: &self.gpu_temp_history,
+            e_temp_history: &self.e_temp_history,
+            p_temp_history: &self.p_temp_history,
+            s_temp_history: &self.s_temp_history,
             surface: self.effective_surface(),
             focus: self.focus,
             proc: &self.proc,
@@ -527,6 +539,12 @@ impl App {
             self.surface = auto_surface(self.last_area.width, self.last_area.height);
         }
         render_app(frame, &self.view());
+    }
+}
+
+fn push_temp(history: &mut History, temp: Option<f32>) {
+    if let Some(value) = temp {
+        history.push(value);
     }
 }
 

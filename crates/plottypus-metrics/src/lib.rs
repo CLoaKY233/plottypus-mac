@@ -8,6 +8,8 @@ mod net;
 mod process;
 mod sampler;
 mod soc;
+mod topology;
+mod zones;
 #[cfg(target_os = "macos")]
 mod sys;
 mod thermal;

@@ -40,11 +40,8 @@ impl FanCollector {
             Inner::Mac(client) => client.sample_sensors(),
             Inner::Empty => SensorsSnapshot::default(),
         };
-        if smc.is_present() {
-            smc
-        } else {
-            crate::hid::sample_temps()
-        }
+        let hid = crate::hid::sample_temps();
+        crate::zones::merge_sensors(smc, &hid)
     }
 }
 
@@ -107,7 +104,7 @@ fn decode_numeric(data_type: u32, bytes: &[u8], size: usize) -> Option<f32> {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{decode_rpm, decode_temp, fourcc};
-    use plottypus_core::{FanMetric, FanSnapshot, SensorsSnapshot, TempReading};
+    use plottypus_core::{FanMetric, FanSnapshot, SensorsSnapshot};
     use std::mem::size_of;
     use std::ptr;
 
@@ -260,10 +257,7 @@ mod macos {
         }
 
         pub(super) fn sample_sensors(&self) -> SensorsSnapshot {
-            let mut cpu = Vec::new();
-            let mut gpu = Vec::new();
-            let mut readings = Vec::new();
-            let mut hotspot = None;
+            let mut named = Vec::new();
             for (key, name) in &self.temp_keys {
                 let Some((ty, bytes, size)) = self.read_key(*key) else {
                     continue;
@@ -271,25 +265,9 @@ mod macos {
                 let Some(c) = decode_temp(ty, &bytes, size) else {
                     continue;
                 };
-                hotspot = Some(hotspot.map_or(c, |h: f32| h.max(c)));
-                match temp_group(name) {
-                    TempGroup::Cpu => cpu.push(c),
-                    TempGroup::Gpu => gpu.push(c),
-                    TempGroup::Other => {}
-                }
-                if readings.len() < 8 {
-                    readings.push(TempReading {
-                        name: name.clone(),
-                        celsius: c,
-                    });
-                }
+                named.push((name.clone(), c));
             }
-            SensorsSnapshot {
-                cpu_c: mean(&cpu),
-                gpu_c: mean(&gpu),
-                hotspot_c: hotspot,
-                readings,
-            }
+            crate::zones::snapshot_from_named(&named, crate::zones::Source::Smc)
         }
 
         fn discover_temps(&self) -> Vec<(u32, String)> {
@@ -313,7 +291,7 @@ mod macos {
                 if decode_temp(ty, &bytes, size).is_none() {
                     continue;
                 }
-                found.push((key, key_label(key)));
+                found.push((key, key_name(key)));
                 if found.len() >= 32 {
                     break;
                 }
@@ -451,47 +429,8 @@ mod macos {
         fourcc([b'F', digit, suffix[0], suffix[1]])
     }
 
-    fn key_label(key: u32) -> String {
-        let bytes = key.to_be_bytes();
-        let raw = String::from_utf8_lossy(&bytes);
-        let name = raw.trim().to_string();
-        match temp_group(&name) {
-            TempGroup::Cpu => String::from("cpu"),
-            TempGroup::Gpu => String::from("gpu"),
-            TempGroup::Other if name.starts_with("TH") => String::from("nand"),
-            TempGroup::Other if name.starts_with("TA") || name.starts_with("Ta") => {
-                String::from("ambient")
-            }
-            TempGroup::Other => name,
-        }
-    }
-
-    enum TempGroup {
-        Cpu,
-        Gpu,
-        Other,
-    }
-
-    fn temp_group(name: &str) -> TempGroup {
-        if name.starts_with("Tp")
-            || name.starts_with("Te")
-            || name.starts_with("Ts")
-            || name.starts_with("TC")
-        {
-            TempGroup::Cpu
-        } else if name.starts_with("Tg") || name.starts_with("TG") {
-            TempGroup::Gpu
-        } else {
-            TempGroup::Other
-        }
-    }
-
-    fn mean(values: &[f32]) -> Option<f32> {
-        if values.is_empty() {
-            None
-        } else {
-            Some(values.iter().sum::<f32>() / values.len() as f32)
-        }
+    fn key_name(key: u32) -> String {
+        String::from_utf8_lossy(&key.to_be_bytes()).trim().to_string()
     }
 }
 

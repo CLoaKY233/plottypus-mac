@@ -218,7 +218,18 @@ fn title_temp(view: &AppView<'_>) -> Option<f32> {
 fn named_temps(view: &AppView<'_>) -> Vec<(String, f32)> {
     let sensors = &view.snapshot.sensors;
     let mut out = Vec::new();
-    if let Some(c) = sensors.cpu_c.or(view.snapshot.cpu.temp_c) {
+    if let Some(c) = sensors.e_c {
+        out.push((String::from("e"), c));
+    }
+    if let Some(c) = sensors.p_c {
+        out.push((String::from("p"), c));
+    }
+    if let Some(c) = sensors.s_c {
+        out.push((String::from("s"), c));
+    }
+    if out.is_empty()
+        && let Some(c) = sensors.cpu_c.or(view.snapshot.cpu.temp_c)
+    {
         out.push((String::from("cpu"), c));
     }
     if let Some(c) = sensors.gpu_c {
@@ -247,7 +258,13 @@ fn extra_temps(view: &AppView<'_>) -> Vec<(String, f32)> {
 
 fn is_headline_temp(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    n == "cpu" || n == "gpu" || n == "hot" || n.contains("hotspot")
+    n == "cpu"
+        || n == "gpu"
+        || n == "hot"
+        || n == "efficiency"
+        || n == "performance"
+        || n == "super"
+        || n.contains("hotspot")
 }
 
 fn render_temp_line(frame: &mut Frame, area: Rect, temps: &[(String, f32)], theme: &Theme) {

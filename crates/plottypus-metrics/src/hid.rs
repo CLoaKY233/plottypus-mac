@@ -13,7 +13,7 @@ pub(crate) fn sample_temps() -> SensorsSnapshot {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use plottypus_core::{SensorsSnapshot, TempReading};
+    use plottypus_core::SensorsSnapshot;
     use std::ffi::c_void;
     use std::ptr;
 
@@ -103,10 +103,7 @@ mod macos {
             return SensorsSnapshot::default();
         }
         let count = unsafe { CFArrayGetCount(services) };
-        let mut cpu = Vec::new();
-        let mut gpu = Vec::new();
-        let mut readings = Vec::new();
-        let mut hotspot = None;
+        let mut named = Vec::new();
         for i in 0..count {
             let service = unsafe { CFArrayGetValueAtIndex(services, i) };
             if service.is_null() {
@@ -116,30 +113,13 @@ mod macos {
             let Some(temp) = read_temp(service) else {
                 continue;
             };
-            hotspot = Some(hotspot.map_or(temp, |h: f32| h.max(temp)));
-            let lower = name.to_ascii_lowercase();
-            if lower.contains("pacc") || lower.contains("eacc") || lower.contains("cpu") {
-                cpu.push(temp);
-            } else if lower.contains("gpu") {
-                gpu.push(temp);
-            }
-            if readings.len() < 8 {
-                readings.push(TempReading {
-                    name: short_name(&name),
-                    celsius: temp,
-                });
-            }
+            named.push((name, temp));
         }
         unsafe {
             CFRelease(services);
             CFRelease(client.cast());
         }
-        SensorsSnapshot {
-            cpu_c: mean(&cpu).or(hotspot),
-            gpu_c: mean(&gpu),
-            hotspot_c: hotspot,
-            readings,
-        }
+        crate::zones::snapshot_from_named(&named, crate::zones::Source::Hid)
     }
 
     fn matching_dict() -> Option<CfDictRef> {
@@ -219,30 +199,6 @@ mod macos {
         }
     }
 
-    fn short_name(product: &str) -> String {
-        let p = product.to_ascii_lowercase();
-        if p.contains("pacc") {
-            String::from("p-cpu")
-        } else if p.contains("eacc") {
-            String::from("e-cpu")
-        } else if p.contains("gpu") {
-            String::from("gpu")
-        } else if p.contains("nand") {
-            String::from("nand")
-        } else if product.is_empty() {
-            String::from("temp")
-        } else {
-            product.chars().take(12).collect()
-        }
-    }
-
-    fn mean(values: &[f32]) -> Option<f32> {
-        if values.is_empty() {
-            None
-        } else {
-            Some(values.iter().sum::<f32>() / values.len() as f32)
-        }
-    }
 }
 
 #[cfg(test)]
