@@ -1,6 +1,7 @@
 mod app;
 mod event;
 mod tui;
+mod worker;
 
 fn main() -> Result<(), i32> {
     tui::install_panic_hook();

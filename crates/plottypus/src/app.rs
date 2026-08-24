@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use plottypus_core::{
     Config, History, PROC_RATIO_MAX, PROC_RATIO_MIN, Result, Snapshot, Surface, auto_surface,
 };
-use plottypus_metrics::{Sampler, Signal, send_signal};
+use plottypus_metrics::{Signal, send_signal};
 use plottypus_ui::{
     AppView, Focus, Hit, LayoutFlags, Panel, ProcView, filtered_processes, hit_test, render_app,
 };
@@ -12,6 +12,7 @@ use ratatui::Frame;
 
 use crate::event::{self, Event};
 use crate::tui::{self, AppTerminal};
+use crate::worker::{self, Cmd, Handle};
 
 pub fn run() -> Result<()> {
     tui::install_panic_hook();
@@ -45,14 +46,10 @@ fn run_inner(terminal: &mut AppTerminal) -> (Result<()>, Option<String>) {
         match event::poll(timeout, app.searching, app.settings, app.expanded.is_some()) {
             Ok(Some(Event::Quit)) => break,
             Ok(Some(ev)) => {
-                if !matches!(ev, Event::Tick)
-                    && let Err(err) = app.on_tick()
-                {
-                    return (Err(err), None);
+                if !matches!(ev, Event::Tick) {
+                    app.on_tick();
                 }
-                if let Err(err) = app.handle(ev) {
-                    return (Err(err), None);
-                }
+                app.handle(ev);
             }
             Ok(None) => {}
             Err(err) => return (Err(err), None),
@@ -63,7 +60,7 @@ fn run_inner(terminal: &mut AppTerminal) -> (Result<()>, Option<String>) {
 
 struct App {
     config: Config,
-    sampler: Sampler,
+    worker: Handle,
     snapshot: Snapshot,
     cpu_history: History,
     gpu_history: History,
@@ -100,12 +97,11 @@ impl App {
     fn new() -> Result<Self> {
         let config = prefs_path().map_or_else(Config::default, |path| Config::load(&path));
         let proc_ratio = config.proc_ratio;
-        let mut sampler = Sampler::new()?;
-        let snapshot = sampler.tick()?;
-        Ok(Self {
+        let worker = worker::spawn(config.interval)?;
+        let mut app = Self {
             config,
-            sampler,
-            snapshot,
+            worker,
+            snapshot: Snapshot::empty(),
             cpu_history: History::default(),
             gpu_history: History::default(),
             mem_history: History::default(),
@@ -135,7 +131,13 @@ impl App {
             last_area: ratatui::layout::Rect::new(0, 0, 80, 24),
             proc_ratio,
             dragging_split: false,
-        })
+        };
+        match app.worker.snaps.recv_timeout(Duration::from_secs(2)) {
+            Ok(Ok(first)) => app.apply_snapshot(first),
+            Ok(Err(err)) => return Err(err),
+            Err(_) => {}
+        }
+        Ok(app)
     }
 
     fn touch(&mut self) {
@@ -162,84 +164,74 @@ impl App {
             .saturating_sub(self.last_tick.elapsed())
     }
 
-    fn tick(&mut self) -> Result<()> {
-        let keep_pid = self.proc.selected_pid;
-        self.snapshot = self.sampler.tick()?;
-        if self.snapshot.cpu.temp_c.is_none() {
-            self.snapshot.cpu.temp_c = self.snapshot.sensors.cpu_c;
+    fn tick(&mut self) {
+        let mut latest = None;
+        while let Ok(result) = self.worker.snaps.try_recv() {
+            latest = Some(result);
         }
-        if let Some(gpu) = self.snapshot.gpu.as_mut()
+        match latest {
+            Some(Ok(snapshot)) => self.apply_snapshot(snapshot),
+            Some(Err(err)) => self.set_status(err.to_string()),
+            None => {}
+        }
+    }
+
+    fn apply_snapshot(&mut self, mut snapshot: Snapshot) {
+        if snapshot.cpu.temp_c.is_none() {
+            snapshot.cpu.temp_c = snapshot.sensors.cpu_c;
+        }
+        if let Some(gpu) = snapshot.gpu.as_mut()
             && gpu.temp_c.is_none()
         {
-            gpu.temp_c = self.snapshot.sensors.gpu_c;
+            gpu.temp_c = snapshot.sensors.gpu_c;
         }
-        self.cpu_history.push(self.snapshot.cpu.scaled);
-        let gpu = self.snapshot.gpu.map_or(0.0, |g| g.scaled);
+        let keep_pid = self.proc.selected_pid;
+        self.snapshot = snapshot;
+        let snap = &self.snapshot;
+        self.cpu_history.push(snap.cpu.scaled);
+        let gpu = snap.gpu.map_or(0.0, |g| g.scaled);
         self.gpu_history.push(gpu);
-        let mem_total = self.snapshot.memory.total_bytes;
+        let mem_total = snap.memory.total_bytes;
         let mem = if mem_total == 0 {
             0.0
         } else {
-            self.snapshot.memory.used_bytes as f32 / mem_total as f32
+            snap.memory.used_bytes as f32 / mem_total as f32
         };
         self.mem_history.push(mem);
-        self.net_rx_history
-            .push(self.snapshot.network.rx_bps as f32);
-        self.net_tx_history
-            .push(self.snapshot.network.tx_bps as f32);
-        self.disk_history.push(self.snapshot.disk.used_ratio());
-        self.cpu_temp_history.push(
-            self.snapshot
-                .cpu
-                .temp_c
-                .or(self.snapshot.sensors.best_cpu_c())
-                .unwrap_or(0.0),
-        );
+        self.net_rx_history.push(snap.network.rx_bps as f32);
+        self.net_tx_history.push(snap.network.tx_bps as f32);
+        self.disk_history.push(snap.disk.used_ratio());
+        self.cpu_temp_history
+            .push(snap.cpu.temp_c.or(snap.sensors.best_cpu_c()).unwrap_or(0.0));
         self.gpu_temp_history.push(
-            self.snapshot
-                .gpu
+            snap.gpu
                 .and_then(|g| g.temp_c)
-                .or(self.snapshot.sensors.gpu_c)
+                .or(snap.sensors.gpu_c)
                 .unwrap_or(0.0),
         );
-        push_temp(&mut self.e_temp_history, self.snapshot.sensors.e_c);
-        push_temp(&mut self.p_temp_history, self.snapshot.sensors.p_c);
-        push_temp(&mut self.s_temp_history, self.snapshot.sensors.s_c);
+        push_temp(&mut self.e_temp_history, snap.sensors.e_c);
+        push_temp(&mut self.p_temp_history, snap.sensors.p_c);
+        push_temp(&mut self.s_temp_history, snap.sensors.s_c);
         self.ready = true;
         self.last_tick = Instant::now();
         self.proc.selected_pid = keep_pid;
         self.sync_selection();
-        Ok(())
     }
 
-    fn handle(&mut self, event: Event) -> Result<()> {
+    fn handle(&mut self, event: Event) {
         match event {
-            Event::Tick => return self.on_tick(),
-            Event::Resize | Event::Quit => return Ok(()),
+            Event::Tick => self.on_tick(),
+            Event::Resize | Event::Quit => {}
             Event::Help => {
                 self.help = !self.help;
                 self.settings = false;
-                return Ok(());
             }
-            Event::FilterCancel => {
-                self.cancel_overlay();
-                return Ok(());
-            }
-            _ => {}
+            Event::FilterCancel => self.cancel_overlay(),
+            _ if self.help => {}
+            _ if self.confirm_kill => self.handle_confirm(event),
+            _ if self.settings => self.handle_settings(event),
+            _ => self.handle_normal(event),
         }
-        if self.help {
-            return Ok(());
-        }
-        if self.confirm_kill {
-            self.handle_confirm(event);
-            return Ok(());
-        }
-        if self.settings {
-            self.handle_settings(event);
-            return Ok(());
-        }
-        self.handle_normal(event);
-        Ok(())
     }
 
     fn cancel_overlay(&mut self) {
@@ -305,9 +297,13 @@ impl App {
             }
             Event::CycleInterval => {
                 self.config.interval = self.config.cycle_interval();
+                let _ = self.worker.cmds.send(Cmd::Interval(self.config.interval));
                 self.touch();
             }
-            Event::Freeze => self.frozen = !self.frozen,
+            Event::Freeze => {
+                self.frozen = !self.frozen;
+                let _ = self.worker.cmds.send(Cmd::Paused(self.frozen));
+            }
             Event::ToggleGpu => {
                 self.config.show_gpu = !self.config.show_gpu;
                 self.touch();
@@ -369,6 +365,7 @@ impl App {
             Event::Settings => self.settings = false,
             Event::CycleInterval => {
                 self.config.interval = self.config.cycle_interval();
+                let _ = self.worker.cmds.send(Cmd::Interval(self.config.interval));
                 self.touch();
             }
             Event::ToggleGpu => {
@@ -538,14 +535,10 @@ impl App {
         }
     }
 
-    fn on_tick(&mut self) -> Result<()> {
-        if self.frozen {
-            return Ok(());
+    fn on_tick(&mut self) {
+        if !self.frozen && self.last_tick.elapsed() >= self.config.interval {
+            self.tick();
         }
-        if self.last_tick.elapsed() >= self.config.interval {
-            self.tick()?;
-        }
-        Ok(())
     }
 
     fn lock_surface(&mut self, surface: Surface) {
@@ -665,10 +658,10 @@ mod tests {
     #[test]
     fn new_app_loads() {
         let app = App::new().unwrap();
-        assert!(!app.ready);
+        assert!(app.ready, "first sample is applied during construction");
         assert!(app.expanded.is_none());
-        assert!(app.cpu_history.is_empty());
-        assert!(app.net_rx_history.is_empty());
+        assert!(!app.cpu_history.is_empty());
+        assert!(!app.net_rx_history.is_empty());
     }
 
     #[test]
@@ -683,7 +676,7 @@ mod tests {
     #[test]
     fn tick_stores_raw_history_values() {
         let mut app = App::new().unwrap();
-        app.tick().unwrap();
+        app.tick();
         assert_eq!(app.cpu_history.last(), Some(app.snapshot.cpu.active));
         assert_eq!(
             app.net_rx_history.last(),
@@ -745,16 +738,14 @@ mod tests {
         app.handle(Event::Click {
             col: cpu.x + 2,
             row: cpu.y + 1,
-        })
-        .unwrap();
+        });
         assert_eq!(app.focus, Focus::Cpu);
         assert!(app.expanded.is_none());
         let corner = LayoutPlan::corner_hit(cpu).unwrap_or_default();
         app.handle(Event::Click {
             col: corner.x,
             row: corner.y,
-        })
-        .unwrap();
+        });
         assert_eq!(app.expanded, Some(Panel::Cpu));
     }
 
@@ -777,20 +768,19 @@ mod tests {
         app.handle(Event::Click {
             col: proc.x + 2,
             row: proc.y + 3,
-        })
-        .unwrap();
+        });
         assert_eq!(app.proc.selected_pid, Some(7));
         assert_eq!(app.detail_pid, Some(7));
-        app.handle(Event::FilterCancel).unwrap();
+        app.handle(Event::FilterCancel);
         assert!(app.detail_pid.is_none());
     }
 
     #[test]
     fn search_question_is_not_a_letter() {
         let mut app = App::new().unwrap();
-        app.handle(Event::Search).unwrap();
+        app.handle(Event::Search);
         assert!(app.searching);
-        app.handle(Event::Help).unwrap();
+        app.handle(Event::Help);
         assert!(app.help);
     }
 
@@ -800,21 +790,21 @@ mod tests {
         app.focus = Focus::Cpu;
         assert!(app.expanded.is_none());
 
-        app.handle(Event::Expand).unwrap();
+        app.handle(Event::Expand);
         assert_eq!(app.expanded, Some(Panel::Cpu));
 
-        app.handle(Event::FilterCancel).unwrap();
+        app.handle(Event::FilterCancel);
         assert!(app.expanded.is_none());
 
-        app.handle(Event::Expand).unwrap();
+        app.handle(Event::Expand);
         assert_eq!(app.expanded, Some(Panel::Cpu));
-        app.handle(Event::FilterCancel).unwrap();
+        app.handle(Event::FilterCancel);
         assert!(app.expanded.is_none());
 
         let panels = app.view().flags().visible_panels();
         let idx = panels.iter().position(|&p| p == app.focus.panel()).unwrap();
         let expected = Focus::from_panel(panels[(idx + 1) % panels.len()]);
-        app.handle(Event::NextPanel).unwrap();
+        app.handle(Event::NextPanel);
         assert_eq!(app.focus, expected);
         assert!(app.expanded.is_none());
     }
