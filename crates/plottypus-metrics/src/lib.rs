@@ -1,3 +1,15 @@
+// Off macOS every collector is a stub: their helpers and fields are kept for
+// symmetry with the real implementations but intentionally never used.
+#![cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        unused_imports,
+        clippy::unused_self,
+        clippy::unnecessary_wraps
+    )
+)]
+
 mod cpu;
 mod disk;
 mod fan;
