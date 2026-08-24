@@ -68,7 +68,7 @@ fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(watts_display(watts), theme.gpu()));
             }
-            if let Some(temp) = view.snapshot.sensors.gpu_c {
+            if let Some(temp) = gpu.temp_c.or(view.snapshot.sensors.gpu_c) {
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(format!("{temp:.0}°"), theme.temp()));
             }
@@ -179,6 +179,14 @@ mod tests {
         fx.snap.sensors.gpu_c = Some(38.0);
         let text = line_text(&title(&fx.view(), &Theme::default()));
         assert!(text.contains("38°"), "{text}");
+        fx.snap.sensors.gpu_c = None;
+        fx.snap.gpu = Some(GpuSnapshot {
+            scaled: 0.12,
+            temp_c: Some(51.0),
+            ..GpuSnapshot::default()
+        });
+        let text = line_text(&title(&fx.view(), &Theme::default()));
+        assert!(text.contains("51°"), "{text}");
     }
 
     #[test]

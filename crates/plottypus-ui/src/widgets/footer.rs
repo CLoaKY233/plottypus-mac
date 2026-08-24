@@ -78,7 +78,7 @@ fn work_spans(theme: &Theme, kill: bool) -> Vec<Span<'static>> {
         Span::styled(" help", theme.dim()),
         Span::styled("   tab", theme.title()),
         Span::styled(" box", theme.dim()),
-        Span::styled("   ↵", theme.title()),
+        Span::styled("   ↗", theme.title()),
         Span::styled(" expand", theme.dim()),
         Span::styled("   drag", theme.title()),
         Span::styled(" resize", theme.dim()),

@@ -112,6 +112,11 @@ impl App {
         if self.snapshot.cpu.temp_c.is_none() {
             self.snapshot.cpu.temp_c = self.snapshot.sensors.cpu_c;
         }
+        if let Some(gpu) = self.snapshot.gpu.as_mut()
+            && gpu.temp_c.is_none()
+        {
+            gpu.temp_c = self.snapshot.sensors.gpu_c;
+        }
         self.cpu_history.push(self.snapshot.cpu.active);
         let gpu = self.snapshot.gpu.map_or(0.0, |g| g.scaled);
         self.gpu_history.push(gpu);
@@ -280,6 +285,9 @@ impl App {
                 }
             }
             Some(Hit::Panel(panel)) => {
+                self.focus = Focus::from_panel(panel);
+            }
+            Some(Hit::Expand(panel)) => {
                 self.focus = Focus::from_panel(panel);
                 self.expand_panel(panel);
             }

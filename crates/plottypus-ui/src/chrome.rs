@@ -30,11 +30,8 @@ pub fn panel_block<'a>(
         .border_style(theme.border(focused || expanded))
         .style(Style::default().bg(theme.bg).fg(theme.fg))
         .title(title);
-    if expanded {
-        block.title(Line::from(Span::styled(" × ", theme.title())).right_aligned())
-    } else {
-        block
-    }
+    let mark = if expanded { " × " } else { " ↗ " };
+    block.title(Line::from(Span::styled(mark, theme.title())).right_aligned())
 }
 
 pub fn render_scaled_graph(

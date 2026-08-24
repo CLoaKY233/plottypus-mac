@@ -41,6 +41,11 @@ impl Sampler {
         if snap.cpu.temp_c.is_none() {
             snap.cpu.temp_c = snap.sensors.cpu_c.or(snap.sensors.hotspot_c);
         }
+        if let Some(gpu) = snap.gpu.as_mut()
+            && gpu.temp_c.is_none()
+        {
+            gpu.temp_c = snap.sensors.gpu_c;
+        }
         snap.processes = self.processes.sample()?;
         snap.thermal = thermal::sample();
         Ok(snap)

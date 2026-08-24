@@ -143,9 +143,7 @@ impl LayoutPlan {
     }
 
     #[must_use]
-    pub fn close_hit(&self) -> Option<Rect> {
-        let panel = self.expanded?;
-        let area = self.panel(panel)?;
+    pub fn corner_hit(area: Rect) -> Option<Rect> {
         if area.width < 5 || area.height == 0 {
             return None;
         }
@@ -156,11 +154,27 @@ impl LayoutPlan {
             height: 1,
         })
     }
+
+    #[must_use]
+    pub fn close_hit(&self) -> Option<Rect> {
+        let panel = self.expanded?;
+        Self::corner_hit(self.panel(panel)?)
+    }
+
+    #[must_use]
+    pub fn expand_hit(&self, panel: Panel) -> Option<Rect> {
+        if self.expanded.is_some() {
+            return None;
+        }
+        Self::corner_hit(self.panel(panel)?)
+    }
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
     Panel(Panel),
+    Expand(Panel),
     ExpandClose,
     Search,
     ProcRow(usize),
@@ -290,41 +304,29 @@ fn work_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
     let split = cols[1];
     let right = cols[2];
 
-    let tall = left.height >= 28;
-    let mid_h = if mid_panels(flags).is_empty() {
-        0
-    } else if tall {
-        8
-    } else if left.height >= 20 {
-        6
-    } else {
-        5
+    let mid_on = !mid_panels(flags).is_empty();
+    let io_on = !io_panels(flags).is_empty();
+    let rows = match (mid_on, io_on) {
+        (true, true) => Layout::vertical([
+            Constraint::Fill(5),
+            Constraint::Fill(4),
+            Constraint::Fill(3),
+        ])
+        .split(left),
+        (true, false) => Layout::vertical([Constraint::Fill(5), Constraint::Fill(4)]).split(left),
+        (false, true) => Layout::vertical([Constraint::Fill(5), Constraint::Fill(3)]).split(left),
+        (false, false) => Layout::vertical([Constraint::Fill(1)]).split(left),
     };
-    let io_h = if io_panels(flags).is_empty() {
-        0
-    } else if tall {
-        7
-    } else if left.height >= 22 {
-        5
-    } else {
-        4
-    };
-    let cpu_h = left.height.saturating_sub(mid_h + io_h);
-
-    let rows = Layout::vertical([
-        Constraint::Length(cpu_h),
-        Constraint::Length(mid_h),
-        Constraint::Length(io_h),
-    ])
-    .split(left);
 
     let mut planned = empty_plan(Surface::Work, footer);
     planned.cpu = Some(rows[0]);
-    if mid_h > 0 {
-        assign_row(&mut planned, rows[1], mid_panels(flags));
+    let mut idx = 1;
+    if mid_on {
+        assign_row(&mut planned, rows[idx], mid_panels(flags));
+        idx += 1;
     }
-    if io_h > 0 {
-        assign_row(&mut planned, rows[2], io_panels(flags));
+    if io_on {
+        assign_row(&mut planned, rows[idx], io_panels(flags));
     }
     planned.split = Some(split);
     planned.processes = Some(right);
@@ -396,6 +398,15 @@ pub fn hit_test(
     {
         return Some(Hit::ExpandClose);
     }
+    if planned.expanded.is_none() {
+        for panel in Panel::ALL {
+            if let Some(corner) = planned.expand_hit(panel)
+                && contains(corner, col, row)
+            {
+                return Some(Hit::Expand(panel));
+            }
+        }
+    }
     if let Some(split) = planned.split
         && contains(split, col, row)
     {
@@ -466,11 +477,20 @@ mod tests {
         let net = planned.net.unwrap_or_default();
         let disk = planned.disk.unwrap_or_default();
         assert!(cpu.height >= 8, "cpu {cpu:?}");
+        let metric_h = cpu.height + gpu.height + net.height;
+        assert!(
+            cpu.height * 2 <= metric_h,
+            "cpu must not dominate the metric column {cpu:?}"
+        );
         assert!(cpu.width + proc.width < 140);
         assert!(proc.height >= 20, "proc should be full left-column height {proc:?}");
         assert!(proc.x > cpu.x + cpu.width, "proc on the right");
         assert!(planned.split.is_some());
         assert!(gpu.height >= 5 && mem.height >= 5 && fans.height >= 5);
+        assert!(
+            gpu.height + 2 >= cpu.height.saturating_sub(4),
+            "gpu/mem/sens should stay in ratio with cpu"
+        );
         assert_eq!(gpu.y, mem.y);
         assert_eq!(mem.y, fans.y);
         assert!(gpu.x < mem.x && mem.x < fans.x);
@@ -496,9 +516,11 @@ mod tests {
         assert!(planned.processes.is_some());
         let cpu = planned.cpu.unwrap_or_default();
         let proc = planned.processes.unwrap_or_default();
+        let gpu = planned.gpu.unwrap_or_default();
         assert!(cpu.height >= 6);
         assert!(proc.height >= 5);
         assert!(cpu.height + 2 < 24, "cpu must not eat the screen");
+        assert!(cpu.height <= gpu.height + 5, "cpu vs mid-row ratio {cpu:?} {gpu:?}");
     }
 
     #[test]
@@ -554,6 +576,11 @@ mod tests {
         assert_eq!(
             hit_test(area, Surface::Work, flags(), cpu.x + 2, cpu.y + 1),
             Some(Hit::Panel(Panel::Cpu))
+        );
+        let corner = LayoutPlan::corner_hit(cpu).unwrap_or_default();
+        assert_eq!(
+            hit_test(area, Surface::Work, flags(), corner.x, corner.y),
+            Some(Hit::Expand(Panel::Cpu))
         );
         let mem = planned.mem.unwrap_or_default();
         assert_eq!(

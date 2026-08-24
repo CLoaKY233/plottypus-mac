@@ -202,6 +202,7 @@ pub struct GpuSnapshot {
     pub watts: Option<f32>,
     pub freq_mhz: Option<u32>,
     pub ane_watts: Option<f32>,
+    pub temp_c: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

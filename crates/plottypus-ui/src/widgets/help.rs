@@ -6,11 +6,12 @@ use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use crate::theme::Theme;
 use crate::widgets::AppView;
 
-const HELP: [&str; 13] = [
+const HELP: [&str; 14] = [
     "tab / shift-tab          move between boxes",
     "enter                    expand focused box",
     "esc                      close expand / help / search",
-    "click a box              open it fullscreen",
+    "click ↗                  expand that box",
+    "click a box              focus it",
     "drag the gutter          resize process column",
     "click ×                  back to home",
     "/                        search processes",
