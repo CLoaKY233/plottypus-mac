@@ -23,7 +23,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         return;
     }
 
-    let split_tx = view.is_expanded(Panel::Net) || inner.height >= 4;
+    let split_tx = inner.height >= 4;
     if split_tx {
         let rows = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).split(inner);
         render_net_graph(frame, rows[0], view.net_rx_history, theme);

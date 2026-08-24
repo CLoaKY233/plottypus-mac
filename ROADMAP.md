@@ -49,7 +49,10 @@ Found in hands-on review against the running binary; each has a regression test 
 
 ## Phase 3 — Layout pass
 
-- [x] Work rebalance: process column default 55% (clamp 35–72); net/disk panes opt-in.
+- [x] Expanded views rebuilt as macmon-style grids: every metric and graph lives in its own
+      bordered, titled cell; layouts are symmetric and fill the body with no dead bands.
+- [x] Terminal owns the background (no painted black); net pane back on first paint.
+- [x] Work rebalance: process column default 55% (clamp 35–72).
 - [ ] Auto-promote net/disk during sustained IO, demote after.
 - [ ] Degradation ladder for shrinking widths beyond the 60-column gate (defined hide order).
 - [x] Quiet contextual footer: base `? / q`; verbs appear per focus/selection only; paused chip.

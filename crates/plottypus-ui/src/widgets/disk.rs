@@ -29,7 +29,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         return;
     }
 
-    let extras = extra_lines(disk, view.is_expanded(Panel::Disk) || inner.height >= 6);
+    let extras = extra_lines(disk, inner.height >= 6);
     let extra_h = u16::try_from(extras.len())
         .unwrap_or(0)
         .min(inner.height.saturating_sub(2));

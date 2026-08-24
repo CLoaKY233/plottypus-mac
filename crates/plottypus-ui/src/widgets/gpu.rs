@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::chrome::{
-    Axis, Graph, GraphInk, panel_block, panel_title, push_kv, push_token, render_scaled_graph,
+    Axis, Graph, GraphInk, panel_block, panel_title, push_token, render_scaled_graph,
 };
 
 use crate::layout::{Degrade, Panel};
@@ -23,10 +23,6 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-    if view.is_expanded(Panel::Gpu) {
-        render_expanded(frame, inner, view, theme);
         return;
     }
     let spec = spec_line(view, theme);
@@ -54,92 +50,6 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     }
 }
 
-fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let mut header = Vec::new();
-    let spec = spec_line(view, theme);
-    if line_has_text(&spec) {
-        header.push(spec);
-    }
-    header.push(load_line(view, theme));
-    let header_h = u16::try_from(header.len()).unwrap_or(1).min(area.height);
-    let remain = area.height.saturating_sub(header_h);
-    let rows = if remain >= 6 {
-        Layout::vertical([
-            Constraint::Length(header_h),
-            Constraint::Fill(1),
-            Constraint::Fill(1),
-        ])
-        .split(area)
-    } else {
-        Layout::vertical([Constraint::Length(header_h), Constraint::Fill(1)]).split(area)
-    };
-    frame.render_widget(Paragraph::new(header), rows[0]);
-    render_gpu_graphs(frame, rows[1], view, theme);
-    if let Some(procs) = rows.get(2) {
-        render_related_procs(frame, *procs, view, theme);
-    }
-}
-
-fn render_gpu_graphs(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let (util, temp) = if area.width >= 36 {
-        let cols = Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).split(area);
-        (cols[0], Some(cols[1]))
-    } else if area.height >= 4 {
-        let rows = Layout::vertical([Constraint::Fill(1), Constraint::Fill(1)]).split(area);
-        (rows[0], rows.get(1).copied())
-    } else {
-        (area, None)
-    };
-    render_scaled_graph(
-        frame,
-        util,
-        Graph {
-            history: view.gpu_history,
-            accent: theme.gpu,
-            theme,
-            scale: Scale::Fixed(1.0),
-            axis: Axis::Percent,
-            ink: GraphInk::Load(view.snapshot.thermal),
-        },
-    );
-    if let Some(temp) = temp {
-        render_scaled_graph(
-            frame,
-            temp,
-            Graph {
-                history: view.gpu_temp_history,
-                accent: theme.temp,
-                theme,
-                scale: Scale::Fixed(100.0),
-                axis: Axis::Celsius,
-                ink: GraphInk::Load(view.snapshot.thermal),
-            },
-        );
-    }
-}
-
-fn load_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
-    let mut spans = Vec::new();
-    push_kv(
-        &mut spans,
-        theme,
-        "util",
-        ready_pct(view.ready, view.snapshot.gpu.map_or(0.0, |g| g.scaled)),
-        theme.title(),
-    );
-    push_kv(
-        &mut spans,
-        theme,
-        "cpu",
-        ready_pct(view.ready, view.snapshot.cpu.scaled),
-        theme.cpu(),
-    );
-    Line::from(spans)
-}
-
 fn spec_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     let items = spec_items(view);
     let mut spans = Vec::new();
@@ -147,43 +57,6 @@ fn spec_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
         push_token(&mut spans, item, theme.dim());
     }
     Line::from(spans)
-}
-
-fn render_related_procs(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    if area.height == 0 {
-        return;
-    }
-    frame.render_widget(
-        Paragraph::new(related_proc_lines(view, area.height, theme)),
-        area,
-    );
-}
-
-fn related_proc_lines(view: &AppView<'_>, rows: u16, theme: &Theme) -> Vec<Line<'static>> {
-    let mut procs: Vec<_> = view.snapshot.processes.iter().collect();
-    procs.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
-    let take = usize::from(rows.saturating_sub(1)).min(procs.len());
-    let mut lines = vec![Line::from(Span::styled(
-        " related  · no per-process gpu %",
-        theme.dim(),
-    ))];
-    for proc in procs.into_iter().take(take) {
-        lines.push(Line::from(vec![
-            Span::styled(format!(" {:>6}  ", proc.pid), theme.dim()),
-            Span::styled(format!("{:<16}", truncate(&proc.name, 16)), theme.fg()),
-            Span::styled(format!(" {:>5.1}", proc.cpu), theme.cpu()),
-        ]));
-    }
-    lines
-}
-
-fn truncate(name: &str, width: usize) -> String {
-    let mut out: String = name.chars().take(width).collect();
-    if name.chars().count() > width {
-        out.pop();
-        out.push('…');
-    }
-    out
 }
 
 fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
@@ -264,7 +137,7 @@ fn line_has_text(line: &Line<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::widgets::tests_support::{fixture, process};
+    use crate::widgets::tests_support::fixture;
     use plottypus_core::{GpuSnapshot, TempReading};
 
     fn line_text(line: &Line<'_>) -> String {
@@ -334,24 +207,6 @@ mod tests {
         }];
         let text = line_text(&title(&fx.view(), &Theme::default()));
         assert!(text.contains("39°"), "{text}");
-    }
-
-    #[test]
-    fn related_procs_omit_unmeasured_gpu() {
-        let mut fx = fixture("");
-        let mut hog = process(904, "Xcode", 12.5);
-        hog.gpu = 77.0;
-        fx.snap.processes = vec![hog];
-        let theme = Theme::default();
-        let text: String = related_proc_lines(&fx.view(), 4, &theme)
-            .iter()
-            .map(line_text)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains("Xcode"), "{text}");
-        assert!(text.contains("12.5"), "{text}");
-        assert!(text.contains("no per-process gpu"), "{text}");
-        assert!(!text.contains("77"), "{text}");
     }
 
     #[test]

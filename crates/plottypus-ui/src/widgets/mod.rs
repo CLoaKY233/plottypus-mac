@@ -1,5 +1,6 @@
 mod cpu;
 mod disk;
+mod expanded;
 mod fans;
 mod footer;
 mod gpu;
@@ -148,27 +149,84 @@ pub fn render_app(frame: &mut Frame, view: &AppView<'_>) {
         degrade: layout.degrade,
         ..view.clone()
     };
+    let expanded = layout.expanded;
 
     if let Some(area) = layout.cpu {
-        cpu::render(frame, area, &view, &theme);
+        render_panel(
+            frame,
+            area,
+            &view,
+            &theme,
+            Panel::Cpu,
+            expanded,
+            cpu::render,
+        );
     }
     if let Some(area) = layout.gpu {
-        gpu::render(frame, area, &view, &theme);
+        render_panel(
+            frame,
+            area,
+            &view,
+            &theme,
+            Panel::Gpu,
+            expanded,
+            gpu::render,
+        );
     }
     if let Some(area) = layout.mem {
-        mem::render(frame, area, &view, &theme);
+        render_panel(
+            frame,
+            area,
+            &view,
+            &theme,
+            Panel::Mem,
+            expanded,
+            mem::render,
+        );
     }
     if let Some(area) = layout.net {
-        net::render(frame, area, &view, &theme);
+        render_panel(
+            frame,
+            area,
+            &view,
+            &theme,
+            Panel::Net,
+            expanded,
+            net::render,
+        );
     }
     if let Some(area) = layout.disk {
-        disk::render(frame, area, &view, &theme);
+        render_panel(
+            frame,
+            area,
+            &view,
+            &theme,
+            Panel::Disk,
+            expanded,
+            disk::render,
+        );
     }
     if let Some(area) = layout.fans {
-        fans::render(frame, area, &view, &theme);
+        render_panel(
+            frame,
+            area,
+            &view,
+            &theme,
+            Panel::Fans,
+            expanded,
+            fans::render,
+        );
     }
     if let Some(area) = layout.processes {
-        processes::render(frame, area, &view, &theme);
+        render_panel(
+            frame,
+            area,
+            &view,
+            &theme,
+            Panel::Processes,
+            expanded,
+            processes::render,
+        );
     }
     footer::render(frame, layout.footer, &view, &theme);
 
@@ -176,6 +234,22 @@ pub fn render_app(frame: &mut Frame, view: &AppView<'_>) {
         help::render_settings(frame, area, &view, &theme);
     } else if view.help {
         help::render(frame, area, &theme);
+    }
+}
+
+fn render_panel(
+    frame: &mut Frame,
+    area: Rect,
+    view: &AppView<'_>,
+    theme: &Theme,
+    panel: Panel,
+    expanded: Option<Panel>,
+    compact: fn(&mut Frame, Rect, &AppView<'_>, &Theme),
+) {
+    if expanded == Some(panel) {
+        expanded::render(frame, area, view, theme, panel);
+    } else {
+        compact(frame, area, view, theme);
     }
 }
 
@@ -487,10 +561,11 @@ mod render_tests {
     }
 
     #[test]
-    fn expand_cpu_hides_other_boxes() {
+    fn expand_cpu_is_a_grid_of_cells() {
         let mut fx = fixture("");
         fx.expanded = Some(Panel::Cpu);
-        fx.snap.cpu.active = 0.5;
+        fx.snap.cpu.scaled = 0.5;
+        fx.snap.cpu.active = 0.7;
         fx.snap.cpu.cores = vec![
             CoreSample {
                 kind: ClusterKind::Efficiency,
@@ -508,24 +583,30 @@ mod render_tests {
         fx.snap.sensors.e_c = Some(36.0);
         fx.snap.sensors.p_c = Some(51.0);
         let text = paint(&fx.view(), 80, 24);
-        assert!(text.contains("cpu"), "{text}");
+        for want in [
+            "load",
+            "power",
+            "clock",
+            "cpu",
+            "efficiency",
+            "performance",
+            "E0",
+            "P0",
+            "36°",
+            "51°",
+        ] {
+            assert!(text.contains(want), "missing {want}: {text}");
+        }
+        assert!(text.contains("busy 70%"), "{text}");
         assert!(
-            text.contains('×') || text.contains('x') || text.contains('X'),
-            "{text}"
+            !text.contains("Macintosh"),
+            "other panels must hide: {text}"
         );
-        assert!(text.contains("busiest"), "{text}");
-        assert!(text.contains("efficiency"), "{text}");
-        assert!(text.contains("performance"), "{text}");
-        assert!(text.contains("E0"), "{text}");
-        assert!(text.contains("P0"), "{text}");
-        assert!(text.contains("36°"), "{text}");
-        assert!(text.contains("51°"), "{text}");
-        assert!(text.contains("Xcode"), "{text}");
-        assert!(!text.contains("Macintosh"), "{text}");
+        assert!(!text.contains("Xcode"), "procs stay in their pane: {text}");
     }
 
     #[test]
-    fn expand_gpu_shows_graphs_and_related() {
+    fn expand_gpu_is_stats_over_two_graphs() {
         let mut fx = fixture("");
         fx.expanded = Some(Panel::Gpu);
         fx.ready = true;
@@ -536,15 +617,13 @@ mod render_tests {
             temp_c: Some(51.0),
             ..GpuSnapshot::default()
         });
-        fx.snap.processes[0].gpu = 77.0;
         let text = paint(&fx.view(), 80, 24);
-        assert!(text.contains("gpu"), "{text}");
-        assert!(text.contains("12%"), "{text}");
-        assert!(text.contains("51°"), "{text}");
-        assert!(text.contains("Xcode"), "{text}");
-        assert!(text.contains("no per-process"), "{text}");
-        assert!(!text.contains("77"), "{text}");
-        assert!(!text.contains("Macintosh"), "{text}");
+        for want in [
+            "util", "power", "clock", "gpu util", "gpu temp", "12%", "51°", "461MHz",
+        ] {
+            assert!(text.contains(want), "missing {want}: {text}");
+        }
+        assert!(!text.contains("no readings on this machine"), "{text}");
     }
 
     #[test]
@@ -589,5 +668,99 @@ mod debug_degrade {
             plan(Rect::new(0, 0, 100, 26), Surface::Work, fs).degrade,
             Degrade::Minimal
         );
+    }
+}
+
+#[cfg(test)]
+mod visual_dump {
+    use crate::layout::Panel;
+    use crate::widgets::render_app;
+    use crate::widgets::tests_support::fixture;
+    use plottypus_core::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn paint(view: &crate::widgets::AppView<'_>, w: u16, h: u16) -> String {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| render_app(f, view)).unwrap();
+        let b = t.backend().buffer();
+        let mut out = String::new();
+        for y in 0..b.area.height {
+            out.push('|');
+            for x in 0..b.area.width {
+                out.push_str(b[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    #[ignore = "visual tool: run with --ignored --nocapture"]
+    fn dump_all_expanded() {
+        for (panel, name) in [
+            (Panel::Cpu, "CPU"),
+            (Panel::Gpu, "GPU"),
+            (Panel::Mem, "MEM"),
+            (Panel::Net, "NET"),
+            (Panel::Disk, "DISK"),
+            (Panel::Fans, "SENS"),
+        ] {
+            let mut fx = fixture("");
+            fx.ready = true;
+            fx.expanded = Some(panel);
+            fx.snap.cpu.scaled = 0.42;
+            fx.snap.cpu.active = 0.61;
+            fx.snap.cpu.watts = Some(9.3);
+            fx.snap.cpu.cores = (0..10)
+                .map(|i| CoreSample {
+                    kind: if i < 4 {
+                        ClusterKind::Efficiency
+                    } else {
+                        ClusterKind::Performance
+                    },
+                    index: i % 6,
+                    scaled: f32::from(i) * 0.07 + 0.15,
+                    active: f32::from(i) * 0.06 + 0.2,
+                })
+                .collect();
+            fx.snap.sensors.e_c = Some(38.0);
+            fx.snap.sensors.p_c = Some(58.0);
+            fx.snap.gpu = Some(GpuSnapshot {
+                scaled: 0.31,
+                watts: Some(2.2),
+                ane_watts: Some(0.4),
+                freq_mhz: Some(1278),
+                temp_c: Some(49.0),
+                ..Default::default()
+            });
+            fx.snap.memory.used_bytes = 22 * 1024 * 1024 * 1024;
+            fx.snap.memory.total_bytes = 36 * 1024 * 1024 * 1024;
+            fx.snap.memory.wired_bytes = 7 * 1024 * 1024 * 1024;
+            fx.snap.memory.compressed_bytes = 2 * 1024 * 1024 * 1024;
+            fx.snap.memory.cache_bytes = 3 * 1024 * 1024 * 1024;
+            fx.snap.memory.swap_used_bytes = 512 * 1024 * 1024;
+            fx.snap.memory.swap_total_bytes = 4 * 1024 * 1024 * 1024;
+            fx.snap.network.iface = "en0".into();
+            fx.snap.network.rx_bps = 12_400_000;
+            fx.snap.network.tx_bps = 890_000;
+            fx.snap.disk.volumes.push(DiskVolume {
+                name: "Macintosh HD".into(),
+                mount: "/".into(),
+                used_bytes: 400 * 1024 * 1024 * 1024,
+                total_bytes: 926 * 1024 * 1024 * 1024,
+            });
+            fx.snap.fans.fans.push(FanMetric {
+                name: "Fan 1".into(),
+                rpm: 1720,
+                max_rpm: 6000,
+            });
+            fx.snap.fans.fans.push(FanMetric {
+                name: "Fan 2".into(),
+                rpm: 2140,
+                max_rpm: 5800,
+            });
+            let text = paint(&fx.view(), 100, 30);
+            println!("\n===== {name} =====\n{text}");
+        }
     }
 }
