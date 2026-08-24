@@ -131,9 +131,46 @@ pub fn render_scaled_graph(frame: &mut Frame, area: Rect, g: Graph<'_>) {
             pip,
         );
     }
+    if g.axis == Axis::Celsius && plot.height >= 3 && plot.width >= 10 {
+        let hint = Rect {
+            x: plot.x,
+            y: plot.y,
+            width: 4.min(plot.width),
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                axis_label(max, g.axis),
+                Style::default().fg(g.theme.dim).bg(g.theme.bg),
+            )),
+            hint,
+        );
+    }
     if gutter > 0 {
         render_axis_ticks(frame, area, gutter, max, g.axis, g.theme);
     }
+}
+
+pub fn panel_title(label: &str, theme: &Theme) -> Line<'static> {
+    Line::from(vec![Span::styled(format!(" {label}  "), theme.dim())])
+}
+
+pub fn push_token(spans: &mut Vec<Span<'static>>, text: String, style: Style) {
+    if !spans.is_empty() {
+        spans.push(Span::raw("  "));
+    }
+    spans.push(Span::styled(text, style));
+}
+
+pub fn push_kv(
+    spans: &mut Vec<Span<'static>>,
+    theme: &Theme,
+    key: &str,
+    value: String,
+    value_style: Style,
+) {
+    push_token(spans, format!("{key}  "), theme.dim());
+    spans.push(Span::styled(value, value_style));
 }
 
 #[must_use]
@@ -142,8 +179,7 @@ pub fn axis_gutter(axis: Axis, width: u16, height: u16) -> u16 {
         return 0;
     }
     let need: u16 = match axis {
-        Axis::None => 0,
-        Axis::Percent | Axis::Celsius => 5,
+        Axis::None | Axis::Percent | Axis::Celsius => 0,
         Axis::Bits => 7,
     };
     if need == 0 || width <= need.saturating_add(6) {
@@ -256,16 +292,16 @@ mod tests {
     }
 
     #[test]
-    fn gutter_only_when_the_plot_still_fits() {
-        assert_eq!(axis_gutter(Axis::Celsius, 40, 8), 5);
-        assert_eq!(axis_gutter(Axis::Percent, 40, 8), 5);
+    fn gutter_is_bits_only() {
+        assert_eq!(axis_gutter(Axis::Percent, 40, 8), 0);
+        assert_eq!(axis_gutter(Axis::Celsius, 40, 8), 0);
         assert_eq!(axis_gutter(Axis::None, 40, 8), 0);
-        assert_eq!(axis_gutter(Axis::Celsius, 10, 8), 0);
-        assert_eq!(axis_gutter(Axis::Celsius, 40, 1), 0);
+        assert_eq!(axis_gutter(Axis::Bits, 40, 8), 7);
+        assert_eq!(axis_gutter(Axis::Bits, 10, 8), 0);
     }
 
     #[test]
-    fn celsius_ticks_do_not_sit_on_braille() {
+    fn celsius_hint_replaces_the_tick_stack() {
         use plottypus_core::History;
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
@@ -293,22 +329,88 @@ mod tests {
             })
             .unwrap();
         let buf = terminal.backend().buffer();
-        let mut out = String::new();
+
+        let mut hint = String::new();
+        for x in 0..4 {
+            hint.push_str(buf[(x, 0)].symbol());
+        }
+        assert_eq!(hint, "100°");
+
+        // the plot owns the full width: no tick gutter anywhere
         for y in 0..buf.area.height {
             for x in 0..buf.area.width {
-                out.push_str(buf[(x, y)].symbol());
-            }
-            out.push('\n');
-        }
-        assert!(out.contains('°'), "{out}");
-        for y in 0..buf.area.height {
-            for x in 0..5 {
+                if x < 4 && y == 0 {
+                    continue;
+                }
                 let ch = buf[(x, y)].symbol();
                 assert!(
-                    ch.chars().all(|c| !('\u{2800}'..='\u{28FF}').contains(&c)),
-                    "braille in gutter y={y} x={x}: {out}"
+                    !ch.chars().any(|c: char| c.is_ascii_uppercase() || c == '%'),
+                    "stray axis label at x={x} y={y}"
                 );
             }
         }
+    }
+
+    #[test]
+    fn percent_graphs_carry_no_axis_ink() {
+        use plottypus_core::History;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut history = History::default();
+        for _ in 0..48 {
+            history.push(0.5);
+        }
+        let backend = TestBackend::new(28, 6);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_scaled_graph(
+                    frame,
+                    frame.area(),
+                    Graph {
+                        history: &history,
+                        accent: Theme::default().cpu,
+                        theme: &Theme::default(),
+                        scale: Scale::Fixed(1.0),
+                        axis: Axis::Percent,
+                        ink: GraphInk::Load(plottypus_core::Thermal::Nominal),
+                    },
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                let sym = buf[(x, y)].symbol();
+                assert!(!sym.contains('%'), "% at {x},{y}");
+                assert!(
+                    !sym.contains('°'),
+                    "hint leaked to percent graph at {x},{y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn titles_follow_the_spacing_contract() {
+        let theme = Theme::default();
+        let line = panel_title("cpu", &theme);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, " cpu  ");
+
+        let mut spans = Vec::new();
+        push_token(&mut spans, String::from("18%"), theme.title());
+        push_token(&mut spans, String::from("8.2W"), theme.cpu());
+        push_kv(
+            &mut spans,
+            &theme,
+            "temp",
+            String::from("42°"),
+            theme.temp(),
+        );
+        let joined: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(joined, "18%  8.2W  temp  42°");
+        assert!(!joined.contains("   "), "{joined}");
     }
 }

@@ -5,7 +5,11 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chrome::{Axis, Graph, GraphInk, panel_block, render_fill_bar, render_scaled_graph};
+use crate::chrome::{
+    Axis, Graph, GraphInk, panel_block, panel_title, push_token, render_fill_bar,
+    render_scaled_graph,
+};
+
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -70,24 +74,20 @@ fn render_compact(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &The
 }
 
 fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
-    let mut spans = vec![Span::styled(" sens  ", theme.dim())];
+    let mut spans = panel_title("sens", theme);
     let temp = title_temp(view);
     let fans = present_fans(view);
     if temp.is_none() && fans.is_empty() {
-        spans.push(Span::styled("— ", theme.dim()));
-        return Line::from(spans);
+        spans.spans.push(Span::styled("—".to_owned(), theme.dim()));
+        return spans;
     }
     if let Some(c) = temp {
-        spans.push(Span::styled(format!("{c:.0}°"), theme.temp()));
+        push_token(&mut spans.spans, format!("{c:.0}°"), theme.temp());
     }
     if !fans.is_empty() {
-        if temp.is_some() {
-            spans.push(Span::raw("  "));
-        }
-        spans.extend(fan_speed_spans(fans, theme));
+        spans.spans.extend(fan_speed_spans(fans, theme));
     }
-    spans.push(Span::raw(" "));
-    Line::from(spans)
+    spans
 }
 
 fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
@@ -178,16 +178,14 @@ fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Th
 }
 
 fn related_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
-    let mut spans = vec![
-        Span::styled(" related  ", theme.dim()),
-        Span::styled("cpu ", theme.dim()),
-        Span::styled(
-            format!("{:.0}%", view.snapshot.cpu.scaled.clamp(0.0, 1.0) * 100.0),
-            theme.cpu(),
-        ),
-    ];
+    let mut spans = vec![Span::styled(" related  ".to_owned(), theme.dim())];
+    spans.push(Span::styled("cpu ".to_owned(), theme.dim()));
+    spans.push(Span::styled(
+        format!("{:.0}%", view.snapshot.cpu.scaled.clamp(0.0, 1.0) * 100.0),
+        theme.cpu(),
+    ));
     if let Some(gpu) = view.snapshot.gpu {
-        spans.push(Span::styled("   gpu ", theme.dim()));
+        spans.push(Span::styled("  gpu ".to_owned(), theme.dim()));
         spans.push(Span::styled(
             format!("{:.0}%", gpu.scaled.clamp(0.0, 1.0) * 100.0),
             theme.gpu(),

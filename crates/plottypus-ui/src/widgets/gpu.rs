@@ -4,7 +4,10 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chrome::{Axis, Graph, GraphInk, panel_block, render_scaled_graph};
+use crate::chrome::{
+    Axis, Graph, GraphInk, panel_block, panel_title, push_kv, push_token, render_scaled_graph,
+};
+
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -118,21 +121,31 @@ fn render_gpu_graphs(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &
 }
 
 fn load_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
-    let gpu = view.snapshot.gpu.map_or(0.0, |g| g.scaled);
-    Line::from(vec![
-        Span::styled(" util  ", theme.dim()),
-        Span::styled(ready_pct(view.ready, gpu), theme.title()),
-        Span::styled("   cpu  ", theme.dim()),
-        Span::styled(ready_pct(view.ready, view.snapshot.cpu.scaled), theme.cpu()),
-    ])
+    let mut spans = Vec::new();
+    push_kv(
+        &mut spans,
+        theme,
+        "util",
+        ready_pct(view.ready, view.snapshot.gpu.map_or(0.0, |g| g.scaled)),
+        theme.title(),
+    );
+    push_kv(
+        &mut spans,
+        theme,
+        "cpu",
+        ready_pct(view.ready, view.snapshot.cpu.scaled),
+        theme.cpu(),
+    );
+    Line::from(spans)
 }
 
 fn spec_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     let items = spec_items(view);
-    if items.is_empty() {
-        return Line::default();
+    let mut spans = Vec::new();
+    for item in items {
+        push_token(&mut spans, item, theme.dim());
     }
-    Line::from(Span::styled(format!(" {}", items.join("  ")), theme.dim()))
+    Line::from(spans)
 }
 
 fn render_related_procs(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
@@ -150,7 +163,7 @@ fn related_proc_lines(view: &AppView<'_>, rows: u16, theme: &Theme) -> Vec<Line<
     procs.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
     let take = usize::from(rows.saturating_sub(1)).min(procs.len());
     let mut lines = vec![Line::from(Span::styled(
-        " related  cpu · no per-process gpu %",
+        " related  · no per-process gpu %",
         theme.dim(),
     ))];
     for proc in procs.into_iter().take(take) {
@@ -173,28 +186,26 @@ fn truncate(name: &str, width: usize) -> String {
 }
 
 fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
-    let mut spans = vec![Span::styled(" gpu  ", theme.dim())];
+    let mut spans = panel_title("gpu", theme);
     match view.snapshot.gpu {
-        None => spans.push(Span::styled("—", theme.dim())),
+        None => spans.spans.push(Span::styled("—", theme.dim())),
         Some(gpu) => {
-            spans.push(Span::styled(
+            push_token(
+                &mut spans.spans,
                 ready_pct(view.ready, gpu.scaled),
                 theme.title(),
-            ));
+            );
             if view.ready
                 && let Some(watts) = gpu.watts
             {
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(watts_display(watts), theme.gpu()));
+                push_token(&mut spans.spans, watts_display(watts), theme.gpu());
             }
         }
     }
     if let Some(temp) = gpu_temp_c(view) {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(format!("{temp:.0}°"), theme.temp()));
+        push_token(&mut spans.spans, format!("{temp:.0}°"), theme.temp());
     }
-    spans.push(Span::raw(" "));
-    Line::from(spans)
+    spans
 }
 
 fn spec_items(view: &AppView<'_>) -> Vec<String> {

@@ -4,7 +4,10 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chrome::{Axis, Graph, GraphInk, panel_block, render_fill_bar, render_scaled_graph};
+use crate::chrome::{
+    Axis, Graph, GraphInk, panel_block, push_token, render_fill_bar, render_scaled_graph,
+};
+
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -86,15 +89,14 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
 }
 
 fn title(mem: &MemorySnapshot, theme: &Theme) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(" mem  ", theme.dim()),
+    let mut spans = vec![
+        Span::styled(" mem  ".to_owned(), theme.dim()),
         Span::styled(bytes_short(mem.used_bytes), theme.title()),
         Span::styled(" / ", theme.dim()),
         Span::styled(bytes_short(mem.total_bytes), theme.title()),
-        Span::raw("  "),
-        Span::styled("●", theme.pressure(mem.pressure)),
-        Span::raw(" "),
-    ])
+    ];
+    push_token(&mut spans, String::from("●"), theme.pressure(mem.pressure));
+    Line::from(spans)
 }
 
 fn spec_items(mem: &MemorySnapshot) -> Vec<String> {

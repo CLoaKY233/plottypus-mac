@@ -4,7 +4,9 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chrome::{Axis, Graph, GraphInk, panel_block, render_fill_bar, render_scaled_graph};
+use crate::chrome::{
+    Axis, Graph, GraphInk, panel_block, push_token, render_fill_bar, render_scaled_graph,
+};
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -69,15 +71,14 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
 }
 
 fn title(disk: &DiskSnapshot, theme: &Theme) -> Line<'static> {
-    let mut spans = vec![Span::styled(" disk  ", theme.dim())];
+    let mut spans = vec![Span::styled(" disk  ".to_owned(), theme.dim())];
     match disk.primary() {
-        None => spans.push(Span::styled("— ", theme.dim())),
+        None => spans.push(Span::styled("—", theme.dim())),
         Some(vol) => {
-            spans.push(Span::styled(format!("{}  ", vol.name), theme.dim()));
+            push_token(&mut spans, vol.name.clone(), theme.dim());
             spans.push(Span::styled(bytes_short(vol.used_bytes), theme.title()));
-            spans.push(Span::styled(" / ", theme.dim()));
+            spans.push(Span::styled(" / ".to_owned(), theme.dim()));
             spans.push(Span::styled(bytes_short(vol.total_bytes), theme.title()));
-            spans.push(Span::raw(" "));
         }
     }
     Line::from(spans)

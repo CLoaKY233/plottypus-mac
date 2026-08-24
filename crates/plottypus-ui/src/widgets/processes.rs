@@ -12,7 +12,7 @@ use crate::widgets::{AppView, Focus};
 pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
     let rows = filtered(view);
     let selected = selected_index(view, &rows);
-    let title = Line::from(Span::styled(format!(" proc  {} ", rows.len()), theme.dim()));
+    let title = Line::from(Span::styled(format!(" proc  {}", rows.len()), theme.dim()));
     let block = panel_block(
         Panel::Processes,
         title,
@@ -144,7 +144,7 @@ fn search_line(view: &AppView<'_>, rows: &[Process], theme: &Theme) -> Line<'sta
     Line::from(vec![
         Span::styled(label, if active { theme.title() } else { theme.dim() }),
         Span::styled(query, if active { theme.title() } else { theme.dim() }),
-        Span::styled(format!("   {} procs", rows.len()), theme.dim()),
+        Span::styled(format!("  {} procs", rows.len()), theme.dim()),
     ])
 }
 

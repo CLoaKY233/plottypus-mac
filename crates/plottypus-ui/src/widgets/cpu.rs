@@ -6,7 +6,10 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chrome::{Axis, Graph, GraphInk, panel_block, render_fill_bar, render_scaled_graph};
+use crate::chrome::{
+    Axis, Graph, GraphInk, panel_block, panel_title, push_kv, push_token, render_fill_bar,
+    render_scaled_graph,
+};
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -307,26 +310,29 @@ fn zone_title(zone: &ZoneCard<'_>, theme: &Theme) -> Line<'static> {
 }
 
 fn stat_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
-    let mut parts = vec![Span::styled(" load  ", theme.dim())];
-    parts.push(Span::styled(
+    let mut parts = Vec::new();
+    push_kv(
+        &mut parts,
+        theme,
+        "load",
         ready_pct(view.ready, view.snapshot.cpu.scaled),
         theme.title(),
-    ));
+    );
     busy_span_explicit(view, theme, &mut parts);
     if let Some(t) = view.snapshot.cpu.temp_c.or(view.snapshot.sensors.cpu_c) {
-        parts.push(Span::styled("   temp  ", theme.dim()));
-        parts.push(Span::styled(format!("{t:.0}°"), theme.temp()));
+        push_kv(&mut parts, theme, "temp", format!("{t:.0}°"), theme.temp());
     }
     if let Some(hot) = view.snapshot.sensors.hotspot_c {
-        parts.push(Span::styled("   hot  ", theme.dim()));
-        parts.push(Span::styled(format!("{hot:.0}°"), theme.temp()));
+        push_kv(&mut parts, theme, "hot", format!("{hot:.0}°"), theme.temp());
     }
     if let Some(word) = thermal_word(view.snapshot.thermal) {
-        parts.push(Span::styled("   thermal  ", theme.dim()));
-        parts.push(Span::styled(
+        push_kv(
+            &mut parts,
+            theme,
+            "thermal",
             word.to_owned(),
             theme.thermal(view.snapshot.thermal),
-        ));
+        );
     }
     Line::from(parts)
 }
@@ -335,8 +341,7 @@ fn busy_span_explicit(view: &AppView<'_>, theme: &Theme, parts: &mut Vec<Span<'s
     let scaled = view.snapshot.cpu.scaled;
     let active = view.snapshot.cpu.active;
     if view.ready && (scaled - active).abs() > 0.01 {
-        parts.push(Span::styled("   busy  ", theme.dim()));
-        parts.push(Span::styled(percent_display(active), theme.fg()));
+        push_kv(parts, theme, "busy", percent_display(active), theme.fg());
     }
 }
 
@@ -411,25 +416,21 @@ fn meter(ratio: f32, width: usize) -> String {
 }
 
 fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
-    let mut spans = vec![
-        Span::styled(" cpu  ", theme.dim()),
-        Span::styled(
-            ready_pct(view.ready, view.snapshot.cpu.scaled),
-            theme.title(),
-        ),
-    ];
+    let mut spans = panel_title("cpu", theme).spans;
+    push_token(
+        &mut spans,
+        ready_pct(view.ready, view.snapshot.cpu.scaled),
+        theme.title(),
+    );
     busy_span(view, theme, &mut spans);
     if view.ready
         && let Some(watts) = view.snapshot.cpu.watts
     {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(watts_display(watts), theme.cpu()));
+        push_token(&mut spans, watts_display(watts), theme.cpu());
     }
     if let Some(temp) = view.snapshot.cpu.temp_c.or(view.snapshot.sensors.cpu_c) {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(format!("{temp:.0}°"), theme.temp()));
+        push_token(&mut spans, format!("{temp:.0}°"), theme.temp());
     }
-    spans.push(Span::raw(" "));
     Line::from(spans)
 }
 
@@ -437,11 +438,11 @@ fn busy_span(view: &AppView<'_>, theme: &Theme, spans: &mut Vec<Span<'static>>) 
     let scaled = view.snapshot.cpu.scaled;
     let active = view.snapshot.cpu.active;
     if view.ready && (scaled - active).abs() > 0.01 {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
+        push_token(
+            spans,
             format!("busy {}", percent_display(active)),
             theme.dim(),
-        ));
+        );
     }
 }
 
@@ -449,20 +450,20 @@ fn spec_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     let mut spans = Vec::new();
     let name = view.snapshot.soc.name.trim();
     if !name.is_empty() {
-        spans.push(Span::styled(format!(" {name}  "), theme.fg()));
+        push_token(&mut spans, name.to_owned(), theme.fg());
     }
     if let Some(cores) = core_label(
         view.snapshot.soc.e_cores,
         view.snapshot.soc.p_cores,
         view.snapshot.soc.s_cores,
     ) {
-        spans.push(Span::styled(format!("{cores}  "), theme.dim()));
+        push_token(&mut spans, cores, theme.dim());
     }
     if let Some(mhz) = view.snapshot.cpu.freq_mhz.filter(|mhz| *mhz > 0) {
-        spans.push(Span::styled(format!("{}  ", freq_label(mhz)), theme.dim()));
+        push_token(&mut spans, freq_label(mhz), theme.dim());
     }
     if view.frozen {
-        spans.push(Span::styled("paused", theme.dim()));
+        push_token(&mut spans, String::from("paused"), theme.dim());
     }
     Line::from(spans)
 }
