@@ -10,7 +10,7 @@ use crate::chrome::{
     Axis, Graph, GraphInk, panel_block, panel_title, push_kv, push_token, render_fill_bar,
     render_scaled_graph,
 };
-use crate::layout::Panel;
+use crate::layout::{Degrade, Panel};
 use crate::theme::Theme;
 use crate::widgets::AppView;
 
@@ -34,12 +34,13 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     }
 
     let spec = spec_line(view, theme);
-    let (plot, spec_row) = if inner.height >= 4 && line_has_text(&spec) {
-        let rows = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).split(inner);
-        (rows[0], Some(rows[1]))
-    } else {
-        (inner, None)
-    };
+    let (plot, spec_row) =
+        if inner.height >= 4 && view.degrade != Degrade::Minimal && line_has_text(&spec) {
+            let rows = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).split(inner);
+            (rows[0], Some(rows[1]))
+        } else {
+            (inner, None)
+        };
     render_scaled_graph(
         frame,
         plot,

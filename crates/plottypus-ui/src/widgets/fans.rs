@@ -10,7 +10,7 @@ use crate::chrome::{
     render_scaled_graph,
 };
 
-use crate::layout::Panel;
+use crate::layout::{Degrade, Panel};
 use crate::theme::Theme;
 use crate::widgets::AppView;
 use plottypus_core::Scale;
@@ -53,7 +53,7 @@ fn render_compact(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &The
         );
         return;
     }
-    if area.height < 2 {
+    if area.height < 2 || view.degrade != Degrade::Full {
         render_headline(frame, area, &named, fans, theme);
         return;
     }

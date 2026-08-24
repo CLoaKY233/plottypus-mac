@@ -12,7 +12,7 @@ use plottypus_core::{History, ProcSort, Snapshot, Surface};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use crate::layout::{LayoutFlags, Panel, plan};
+use crate::layout::{Degrade, LayoutFlags, Panel, plan};
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -78,6 +78,7 @@ pub struct AppView<'a> {
     pub p_temp_history: &'a History,
     pub s_temp_history: &'a History,
     pub surface: Surface,
+    pub degrade: Degrade,
     pub focus: Focus,
     pub proc: &'a ProcView,
     pub help: bool,
@@ -144,6 +145,7 @@ pub fn render_app(frame: &mut Frame, view: &AppView<'_>) {
     let layout = plan(area, view.surface, view.flags());
     let view = AppView {
         surface: layout.surface,
+        degrade: layout.degrade,
         ..view.clone()
     };
 
@@ -187,6 +189,7 @@ pub(crate) mod tests_support {
     use plottypus_core::{History, Process, Snapshot, Surface};
 
     use super::{AppView, Focus, ProcView};
+    use crate::layout::Degrade;
 
     pub(crate) struct Fixture {
         pub snap: Snapshot,
@@ -203,6 +206,7 @@ pub(crate) mod tests_support {
         pub s_temp: History,
         pub proc: ProcView,
         pub surface: Surface,
+        pub degrade: Degrade,
         pub focus: Focus,
         pub help: bool,
         pub settings: bool,
@@ -251,6 +255,7 @@ pub(crate) mod tests_support {
                 ..ProcView::default()
             },
             surface: Surface::Work,
+            degrade: Degrade::Full,
             focus: Focus::Processes,
             help: false,
             settings: false,
@@ -266,6 +271,7 @@ pub(crate) mod tests_support {
         pub(crate) fn view(&self) -> AppView<'_> {
             AppView {
                 snapshot: &self.snap,
+                degrade: self.degrade,
                 cpu_history: &self.cpu,
                 gpu_history: &self.gpu,
                 mem_history: &self.mem,
@@ -295,7 +301,7 @@ pub(crate) mod tests_support {
                 sort: plottypus_core::ProcSort::Cpu,
                 detail_pid: None,
                 expanded: self.expanded,
-                proc_ratio: 34,
+                proc_ratio: 55,
                 interval_ms: 1000,
                 status: None,
             }
@@ -435,6 +441,52 @@ mod render_tests {
     }
 
     #[test]
+    fn tight_work_drops_fan_graph_but_keeps_headline() {
+        use crate::layout::Degrade;
+        let mut fx = fixture("");
+        fx.ready = true;
+        fx.snap.cpu.scaled = 0.3;
+        fx.snap.sensors.cpu_c = Some(42.0);
+        fx.snap.fans = FanSnapshot {
+            fans: vec![FanMetric {
+                name: String::from("Fan 1"),
+                rpm: 1200,
+                max_rpm: 6000,
+            }],
+        };
+        let mut view = fx.view();
+        view.degrade = Degrade::Tight;
+        let text = paint(&view, 120, 30);
+        assert!(text.contains("1200 rpm"), "{text}");
+        assert!(
+            !text.contains("related"),
+            "compact never shows related: {text}"
+        );
+    }
+
+    #[test]
+    fn minimal_work_strips_specs_and_graphs() {
+        use crate::layout::Degrade;
+        let mut fx = fixture("");
+        fx.ready = true;
+        fx.snap.cpu.scaled = 0.3;
+        fx.snap.memory.wired_bytes = 8 * 1024 * 1024 * 1024;
+        fx.snap.cpu.temp_c = Some(42.0);
+        let mut view = fx.view();
+        view.degrade = Degrade::Minimal;
+        let text = paint(&view, 100, 26);
+        assert!(text.contains("mem"), "{text}");
+        assert!(
+            !text.contains("wired"),
+            "specs must collapse at Minimal: {text}"
+        );
+        assert!(
+            !text.contains("M4 Pro"),
+            "cpu spec subline must collapse at Minimal: {text}"
+        );
+    }
+
+    #[test]
     fn expand_cpu_hides_other_boxes() {
         let mut fx = fixture("");
         fx.expanded = Some(Panel::Cpu);
@@ -507,5 +559,35 @@ mod render_tests {
         assert!(text.contains("expand"), "{text}");
         assert!(text.contains("focus"), "{text}");
         assert!(text.contains('↗'), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod debug_degrade {
+    use crate::layout::{Degrade, LayoutFlags, plan};
+    use plottypus_core::Surface;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn print_degrades() {
+        let fs = LayoutFlags {
+            show_gpu: true,
+            show_net: true,
+            show_disk: true,
+            show_fans: true,
+            has_gpu: true,
+            has_fans: true,
+            has_disk: true,
+            expanded: None,
+            proc_ratio: 55,
+        };
+        for (w, h) in [(100u16, 26u16), (160, 17), (120, 30)] {
+            let p = plan(Rect::new(0, 0, w, h), Surface::Work, fs);
+            println!("{w}x{h} -> {:?} surface={:?}", p.degrade, p.surface);
+        }
+        assert_eq!(
+            plan(Rect::new(0, 0, 100, 26), Surface::Work, fs).degrade,
+            Degrade::Minimal
+        );
     }
 }

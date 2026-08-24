@@ -156,7 +156,7 @@ pub fn panel_title(label: &str, theme: &Theme) -> Line<'static> {
 }
 
 pub fn push_token(spans: &mut Vec<Span<'static>>, text: String, style: Style) {
-    if !spans.is_empty() {
+    if !spans.is_empty() && !spans.last().is_some_and(|span| span.content.ends_with(' ')) {
         spans.push(Span::raw("  "));
     }
     spans.push(Span::styled(text, style));

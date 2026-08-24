@@ -99,9 +99,40 @@ pub enum Region {
     Footer,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Degrade {
+    #[default]
+    Full,
+    Tight,
+    Minimal,
+}
+
+impl Degrade {
+    fn for_left_rail(width: u16, height: u16) -> Self {
+        if width < 50 || height < 17 {
+            Degrade::Minimal
+        } else if width < 64 || height < 22 {
+            Degrade::Tight
+        } else {
+            Degrade::Full
+        }
+    }
+
+    fn for_glance(body: Rect) -> Self {
+        if body.height < 12 || body.width < 50 {
+            Degrade::Minimal
+        } else if body.height < 18 {
+            Degrade::Tight
+        } else {
+            Degrade::Full
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutPlan {
     pub surface: Surface,
+    pub degrade: Degrade,
     pub cpu: Option<Rect>,
     pub gpu: Option<Rect>,
     pub mem: Option<Rect>,
@@ -212,9 +243,10 @@ pub fn plan(area: Rect, surface: Surface, flags: LayoutFlags) -> LayoutPlan {
     }
 }
 
-fn empty_plan(surface: Surface, footer: Rect) -> LayoutPlan {
+fn empty_plan(surface: Surface, degrade: Degrade, footer: Rect) -> LayoutPlan {
     LayoutPlan {
         surface,
+        degrade,
         cpu: None,
         gpu: None,
         mem: None,
@@ -229,7 +261,7 @@ fn empty_plan(surface: Surface, footer: Rect) -> LayoutPlan {
 }
 
 fn expanded_plan(surface: Surface, body: Rect, footer: Rect, panel: Panel) -> LayoutPlan {
-    let mut planned = empty_plan(surface, footer);
+    let mut planned = empty_plan(surface, Degrade::Full, footer);
     planned.expanded = Some(panel);
     match panel {
         Panel::Cpu => planned.cpu = Some(body),
@@ -244,6 +276,7 @@ fn expanded_plan(surface: Surface, body: Rect, footer: Rect, panel: Panel) -> La
 }
 
 fn glance_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
+    let degrade = Degrade::for_glance(body);
     let show_gpu = flags.visible(Panel::Gpu);
     let show_mem = flags.visible(Panel::Mem);
     let mid = u16::from(show_gpu) + u16::from(show_mem);
@@ -276,7 +309,7 @@ fn glance_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
     ])
     .split(body);
 
-    let mut planned = empty_plan(Surface::Glance, footer);
+    let mut planned = empty_plan(Surface::Glance, degrade, footer);
     planned.cpu = Some(rows[0]);
     if mid_h > 0 {
         assign_row(
@@ -298,6 +331,10 @@ fn glance_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
 }
 
 fn work_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
+    let left_w = body
+        .width
+        .saturating_sub(body.width * flags.proc_ratio.clamp(PROC_RATIO_MIN, PROC_RATIO_MAX) / 100);
+    let degrade = Degrade::for_left_rail(left_w, body.height);
     let ratio = flags.proc_ratio.clamp(PROC_RATIO_MIN, PROC_RATIO_MAX);
     let proc_w = (u32::from(body.width) * u32::from(ratio) / 100) as u16;
     // keeps the clamp range from inverting below the gate
@@ -330,7 +367,7 @@ fn work_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
     }
     let rows = Layout::vertical(weights).split(left);
 
-    let mut planned = empty_plan(Surface::Work, footer);
+    let mut planned = empty_plan(Surface::Work, degrade, footer);
     let mut idx = 0;
     if hero_on {
         assign_row(&mut planned, rows[idx], hero_panels(flags));
@@ -483,8 +520,37 @@ mod tests {
             has_fans: true,
             has_disk: true,
             expanded: None,
-            proc_ratio: 34,
+            proc_ratio: 55,
         }
+    }
+
+    #[test]
+    fn degrade_ladder_boundaries() {
+        // left rail = width * (1 - 55%)
+        let cases = [
+            (120, 30, Degrade::Tight),   // left 54
+            (145, 30, Degrade::Full),    // left 65
+            (100, 30, Degrade::Minimal), // left 45
+            (160, 16, Degrade::Minimal), // body is 15 tall here
+            (160, 18, Degrade::Tight),   // body 17: width ok, height short
+            (170, 23, Degrade::Full),    // body 22 clears both bands
+        ];
+        for (width, height, want) in cases {
+            let planned = plan(Rect::new(0, 0, width, height), Surface::Work, flags());
+            assert_eq!(planned.degrade, want, "{width}x{height}");
+        }
+        let mut narrow = flags();
+        narrow.proc_ratio = 35;
+        let planned = plan(Rect::new(0, 0, 120, 30), Surface::Work, narrow);
+        assert_eq!(planned.degrade, Degrade::Full);
+    }
+
+    #[test]
+    fn expanded_views_never_degrade() {
+        let mut fs = flags();
+        fs.expanded = Some(Panel::Cpu);
+        let planned = plan(Rect::new(0, 0, 70, 20), Surface::Work, fs);
+        assert_eq!(planned.degrade, Degrade::Full);
     }
 
     #[test]

@@ -607,6 +607,7 @@ impl App {
             p_temp_history: &self.p_temp_history,
             s_temp_history: &self.s_temp_history,
             surface: self.effective_surface(),
+            degrade: plottypus_ui::Degrade::Full,
             focus: self.focus,
             proc: &self.proc,
             help: self.help,

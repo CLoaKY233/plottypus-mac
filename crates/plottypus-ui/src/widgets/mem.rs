@@ -8,6 +8,7 @@ use crate::chrome::{
     Axis, Graph, GraphInk, panel_block, push_token, render_fill_bar, render_scaled_graph,
 };
 
+use crate::layout::Degrade;
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -27,8 +28,9 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         return;
     }
 
+    let minimal = view.degrade == Degrade::Minimal;
     let specs = spec_items(mem);
-    let show_specs = area.height >= 5 && !specs.is_empty();
+    let show_specs = !minimal && area.height >= 5 && !specs.is_empty();
     let (body, spec_col) = if show_specs && inner.width >= 50 {
         let cols = Layout::horizontal([
             Constraint::Fill(1),
@@ -62,7 +64,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
 
     let ratio = mem_ratio(mem.used_bytes, mem.total_bytes);
     render_fill_bar(frame, rows[0], ratio, theme.mem);
-    if rows.len() > 1 {
+    if rows.len() > 1 && !minimal {
         render_scaled_graph(
             frame,
             rows[1],
