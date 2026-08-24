@@ -300,32 +300,45 @@ fn glance_plan(body: Rect, footer: Rect, flags: LayoutFlags) -> LayoutPlan {
         0
     };
 
-    let rows = Layout::vertical([
-        Constraint::Length(cpu_h),
-        Constraint::Length(mid_h),
-        Constraint::Length(io_h),
-        Constraint::Length(fan_h),
-        Constraint::Fill(1),
-    ])
-    .split(body);
+    let mut constraints = vec![Constraint::Length(cpu_h), Constraint::Fill(1)];
+    if mid_h > 0 {
+        constraints.push(Constraint::Length(3));
+    }
+    if io_h > 0 {
+        constraints.push(Constraint::Length(3));
+    }
+    if fan_h > 0 {
+        constraints.push(Constraint::Length(3));
+    }
+    let rows = Layout::vertical(constraints).split(body);
 
     let mut planned = empty_plan(Surface::Glance, degrade, footer);
-    planned.cpu = Some(rows[0]);
+    // idle space flows into the hero graph, which sits directly above it
+    let fill = rows[1];
+    let cpu_top = rows[0];
+    planned.cpu = Some(Rect {
+        height: cpu_top.height.saturating_add(fill.height),
+        ..cpu_top
+    });
+
+    let mut idx = 2;
     if mid_h > 0 {
         assign_row(
             &mut planned,
-            rows[1],
+            rows[idx],
             [Panel::Gpu, Panel::Mem]
                 .into_iter()
                 .filter(|p| flags.visible(*p))
                 .collect(),
         );
+        idx += 1;
     }
     if io_h > 0 {
-        assign_row(&mut planned, rows[2], io_panels(flags));
+        assign_row(&mut planned, rows[idx], io_panels(flags));
+        idx += 1;
     }
     if fan_h > 0 {
-        planned.fans = Some(rows[3]);
+        planned.fans = Some(rows[idx]);
     }
     planned
 }
@@ -644,6 +657,27 @@ mod tests {
         assert_eq!(planned.footer.height, 1);
         assert_eq!(planned.region(Region::Processes), None);
         assert_eq!(planned.region(Region::Cpu), planned.cpu);
+    }
+
+    #[test]
+    fn glance_idle_space_goes_to_the_hero_graph() {
+        let mut fs = flags();
+        fs.show_gpu = false;
+        fs.show_net = false;
+        fs.show_disk = false;
+        let planned = plan(Rect::new(0, 0, 80, 24), Surface::Glance, fs);
+        let body_h = 23;
+        let cpu = planned.cpu.unwrap_or_default();
+        assert!(
+            cpu.height >= body_h / 2,
+            "hero should own the slack: {cpu:?}"
+        );
+        // every assigned panel sits below the hero and above the footer
+        for panel in [Panel::Mem, Panel::Fans] {
+            if let Some(rect) = planned.panel(panel) {
+                assert!(rect.y >= cpu.y + cpu.height, "{panel:?} overlaps hero");
+            }
+        }
     }
 
     #[test]
