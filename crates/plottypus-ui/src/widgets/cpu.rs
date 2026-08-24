@@ -29,7 +29,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     }
 
     let spec = spec_line(view, theme);
-    let (plot, spec_row) = if inner.height >= 4 && !spec.spans.is_empty() {
+    let (plot, spec_row) = if inner.height >= 4 && line_has_text(&spec) {
         let rows = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).split(inner);
         (rows[0], Some(rows[1]))
     } else {
@@ -50,16 +50,26 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
 }
 
 fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let core_n = view.snapshot.cpu.cores.len().min(20);
-    let core_h = u16::try_from(core_n).unwrap_or(0).min(area.height / 3).max(4);
-    let rows = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Fill(3),
-        Constraint::Length(core_h.min(area.height.saturating_sub(8))),
-        Constraint::Fill(2),
-    ])
-    .split(area);
-    frame.render_widget(Paragraph::new(vec![spec_line(view, theme), stat_line(view, theme)]), rows[0]);
+    let mut header = Vec::new();
+    let spec = spec_line(view, theme);
+    if line_has_text(&spec) {
+        header.push(spec);
+    }
+    header.push(stat_line(view, theme));
+    let header_h = u16::try_from(header.len()).unwrap_or(1).min(area.height);
+    let remain = area.height.saturating_sub(header_h);
+    let has_detail = !view.snapshot.cpu.cores.is_empty() || !view.snapshot.processes.is_empty();
+    let rows = if has_detail && remain >= 6 {
+        Layout::vertical([
+            Constraint::Length(header_h),
+            Constraint::Fill(1),
+            Constraint::Fill(1),
+        ])
+        .split(area)
+    } else {
+        Layout::vertical([Constraint::Length(header_h), Constraint::Fill(1)]).split(area)
+    };
+    frame.render_widget(Paragraph::new(header), rows[0]);
     render_scaled_graph(
         frame,
         rows[1],
@@ -69,11 +79,28 @@ fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Th
         Scale::Fixed(1.0),
         Axis::Percent,
     );
-    if rows.len() > 2 {
-        render_core_list(frame, rows[2], view, theme);
+    if let Some(detail) = rows.get(2) {
+        render_expanded_detail(frame, *detail, view, theme);
     }
-    if rows.len() > 3 {
-        render_top_procs(frame, rows[3], view, theme);
+}
+
+fn render_expanded_detail(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
+    let has_cores = !view.snapshot.cpu.cores.is_empty();
+    let has_procs = !view.snapshot.processes.is_empty();
+    match (has_cores, has_procs) {
+        (true, true) if area.width >= 48 => {
+            let cols = Layout::horizontal([Constraint::Fill(3), Constraint::Fill(2)]).split(area);
+            render_core_list(frame, cols[0], view, theme);
+            render_top_procs(frame, cols[1], view, theme);
+        }
+        (true, true) => {
+            let rows = Layout::vertical([Constraint::Fill(1), Constraint::Fill(1)]).split(area);
+            render_core_list(frame, rows[0], view, theme);
+            render_top_procs(frame, rows[1], view, theme);
+        }
+        (true, false) => render_core_list(frame, area, view, theme),
+        (false, true) => render_top_procs(frame, area, view, theme),
+        (false, false) => {}
     }
 }
 
@@ -91,25 +118,23 @@ fn stat_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
         parts.push(Span::styled("   hot  ", theme.dim()));
         parts.push(Span::styled(format!("{hot:.0}°"), theme.temp()));
     }
-    match view.snapshot.thermal {
-        Thermal::Nominal => {
-            parts.push(Span::styled("   thermal  ", theme.dim()));
-            parts.push(Span::styled("nominal", theme.dim()));
-        }
-        other => {
-            if let Some(word) = thermal_word(other) {
-                parts.push(Span::styled("   thermal  ", theme.dim()));
-                parts.push(Span::styled(word.to_owned(), theme.thermal(other)));
-            }
-        }
+    if let Some(word) = thermal_word(view.snapshot.thermal) {
+        parts.push(Span::styled("   thermal  ", theme.dim()));
+        parts.push(Span::styled(
+            word.to_owned(),
+            theme.thermal(view.snapshot.thermal),
+        ));
     }
     Line::from(parts)
 }
 
 fn render_top_procs(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let mut procs = view.snapshot.processes.clone();
+    if area.height == 0 {
+        return;
+    }
+    let mut procs: Vec<_> = view.snapshot.processes.iter().collect();
     procs.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
-    let take = usize::from(area.height.saturating_sub(1)).min(procs.len()).min(8);
+    let take = usize::from(area.height.saturating_sub(1)).min(procs.len());
     let mut lines = vec![Line::from(Span::styled(" busiest", theme.dim()))];
     for proc in procs.into_iter().take(take) {
         lines.push(Line::from(vec![
@@ -131,31 +156,40 @@ fn truncate(name: &str, width: usize) -> String {
 }
 
 fn render_core_list(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let take = usize::from(area.height).min(view.snapshot.cpu.cores.len());
-    let lines: Vec<Line> = view
-        .snapshot
-        .cpu
-        .cores
-        .iter()
-        .take(take)
-        .map(|core| {
-            let tag = match core.kind {
-                plottypus_core::ClusterKind::Efficiency => "E",
-                plottypus_core::ClusterKind::Performance => "P",
-                plottypus_core::ClusterKind::Super => "S",
-            };
-            let bar = meter(core.active, 16);
-            Line::from(vec![
-                Span::styled(format!(" {tag}{:<2} ", core.index), theme.dim()),
-                Span::styled(bar, theme.cpu()),
-                Span::styled(
-                    format!(" {:>3}", percent_display(core.active)),
-                    theme.title(),
-                ),
-            ])
-        })
-        .collect();
+    let cores = &view.snapshot.cpu.cores;
+    if area.width == 0 || area.height == 0 || cores.is_empty() {
+        return;
+    }
+    let rows_n = usize::from(area.height);
+    let cols_n = cores.len().div_ceil(rows_n).max(1);
+    let col_w = (usize::from(area.width) / cols_n).max(1);
+    let mut rows: Vec<Vec<Span>> = vec![Vec::new(); rows_n];
+    for (i, core) in cores.iter().take(rows_n.saturating_mul(cols_n)).enumerate() {
+        rows[i % rows_n].extend(core_spans(core, col_w, theme));
+    }
+    let lines: Vec<Line> = rows.into_iter().map(Line::from).collect();
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn core_spans(
+    core: &plottypus_core::CoreSample,
+    width: usize,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let tag = match core.kind {
+        plottypus_core::ClusterKind::Efficiency => "E",
+        plottypus_core::ClusterKind::Performance => "P",
+        plottypus_core::ClusterKind::Super => "S",
+    };
+    let label = format!(" {tag}{:<2} ", core.index);
+    let pct = format!(" {:>4}", percent_display(core.active));
+    let meter_w = width.saturating_sub(label.chars().count() + pct.chars().count());
+    let mut spans = vec![Span::styled(label, theme.dim())];
+    if meter_w >= 4 {
+        spans.push(Span::styled(meter(core.active, meter_w), theme.cpu()));
+    }
+    spans.push(Span::styled(pct, theme.title()));
+    spans
 }
 
 fn meter(ratio: f32, width: usize) -> String {
@@ -241,6 +275,10 @@ fn thermal_word(thermal: Thermal) -> Option<&'static str> {
     }
 }
 
+fn line_has_text(line: &Line<'_>) -> bool {
+    line.spans.iter().any(|s| !s.content.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,6 +339,7 @@ mod tests {
         assert!(text.contains("3.2GHz"));
         let stats = line_text(&stat_line(&fx.view(), &Theme::default()));
         assert!(stats.contains("42°"));
+        assert!(!stats.contains("nominal"), "{stats}");
     }
 
     #[test]

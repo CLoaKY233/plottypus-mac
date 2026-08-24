@@ -63,8 +63,8 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
 
     let table = Table::new(table_rows, widths)
         .header(Row::new(headers).style(theme.dim()))
-    .row_highlight_style(theme.selected())
-    .column_spacing(1);
+        .row_highlight_style(theme.selected())
+        .column_spacing(1);
 
     let mut state = TableState::default();
     if !rows.is_empty() {

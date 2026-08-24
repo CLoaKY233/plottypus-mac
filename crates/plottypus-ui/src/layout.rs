@@ -168,7 +168,6 @@ impl LayoutPlan {
         }
         Self::corner_hit(self.panel(panel)?)
     }
-
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -502,7 +501,10 @@ mod tests {
         assert_eq!(cpu.height, gpu.height);
         assert!(cpu.x < gpu.x);
         assert!(cpu.width + proc.width < 140);
-        assert!(proc.height >= 20, "proc should be full left-column height {proc:?}");
+        assert!(
+            proc.height >= 20,
+            "proc should be full left-column height {proc:?}"
+        );
         assert!(proc.x > cpu.x + cpu.width, "proc on the right");
         assert!(planned.split.is_some());
         assert!(mem.height >= 5 && fans.height >= 5);

@@ -5,11 +5,11 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use plottypus_core::Scale;
 use crate::chrome::{Axis, panel_block, render_fill_bar, render_scaled_graph};
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
+use plottypus_core::Scale;
 
 pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
     let block = panel_block(
@@ -28,73 +28,38 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         render_expanded(frame, inner, view, theme);
         return;
     }
+    render_compact(frame, inner, view, theme);
+}
 
+fn render_compact(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
     let named = named_temps(view);
-    let extras = extra_temps(view);
-    let fans = &view.snapshot.fans.fans;
-
-    let named_h = u16::from(!named.is_empty());
-    let graph_h = if inner.height >= 5 { 2 } else { 0 };
-    let after_named = inner.height.saturating_sub(named_h + graph_h);
-    let fan_n = u16::try_from(fans.len()).unwrap_or(0);
-    let fan_h = if fan_n == 0 {
-        0
-    } else if after_named >= fan_n.saturating_mul(2) {
-        fan_n.saturating_mul(2)
-    } else {
-        after_named.min(fan_n)
-    };
-    let extra_h = after_named
-        .saturating_sub(fan_h)
-        .min(u16::try_from(extras.len()).unwrap_or(0));
-
-    let mut constraints = Vec::new();
-    if named_h > 0 {
-        constraints.push(Constraint::Length(1));
-    }
-    if graph_h > 0 {
-        constraints.push(Constraint::Length(graph_h));
-    }
-    if extra_h > 0 {
-        constraints.push(Constraint::Length(extra_h));
-    }
-    if fan_h > 0 {
-        constraints.push(Constraint::Length(fan_h));
-    }
-    if constraints.is_empty() {
-        return;
-    }
-
-    let parts = Layout::vertical(constraints).split(inner);
-    let mut i = 0;
-    if named_h > 0 {
-        render_temp_line(frame, parts[i], &named, theme);
-        i += 1;
-    }
-    if graph_h > 0 {
+    if named.is_empty() {
         render_scaled_graph(
             frame,
-            parts[i],
+            area,
             view.cpu_temp_history,
             theme.temp,
             theme,
             Scale::Fixed(100.0),
             Axis::None,
         );
-        i += 1;
+        return;
     }
-    if extra_h > 0 {
-        render_temp_list(
-            frame,
-            parts[i],
-            &extras[..usize::from(extra_h)],
-            theme,
-        );
-        i += 1;
+    if area.height < 2 {
+        render_temp_line(frame, area, &named, theme);
+        return;
     }
-    if fan_h > 0 {
-        render_fans(frame, parts[i], fans, theme);
-    }
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
+    render_temp_line(frame, rows[0], &named, theme);
+    render_scaled_graph(
+        frame,
+        rows[1],
+        view.cpu_temp_history,
+        theme.temp,
+        theme,
+        Scale::Fixed(100.0),
+        Axis::None,
+    );
 }
 
 fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
@@ -127,65 +92,116 @@ fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
 }
 
 fn render_expanded(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let rows = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Fill(1),
-        Constraint::Fill(1),
-        Constraint::Length(5),
-        Constraint::Fill(1),
-    ])
-    .split(area);
+    let extras = extra_temps(view);
+    let fans = &view.snapshot.fans.fans;
+    let show_gpu = view.snapshot.sensors.gpu_c.is_some()
+        || view.snapshot.gpu.and_then(|g| g.temp_c).is_some()
+        || !view.gpu_temp_history.is_empty();
+
+    let label_h = 2u16.saturating_add(u16::from(show_gpu));
+    let min_graphs = 2u16.saturating_add(if show_gpu { 2 } else { 0 });
+    let leftover = area
+        .height
+        .saturating_sub(label_h.saturating_add(min_graphs));
+    let fan_h = fan_block_height(fans.len(), leftover);
+    let extra_h = leftover
+        .saturating_sub(fan_h)
+        .min(u16::try_from(extras.len()).unwrap_or(0));
+
+    let mut constraints = vec![
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Fill(2),
+    ];
+    if show_gpu {
+        constraints.push(Constraint::Length(1));
+        constraints.push(Constraint::Fill(2));
+    }
+    if fan_h > 0 {
+        constraints.push(Constraint::Length(fan_h));
+    }
+    if extra_h > 0 {
+        constraints.push(Constraint::Length(extra_h));
+    }
+
+    let parts = Layout::vertical(constraints).split(area);
+    let mut i = 0;
+    frame.render_widget(Paragraph::new(related_line(view, theme)), parts[i]);
+    i += 1;
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled(" related  ", theme.dim()),
-                Span::styled("cpu ", theme.dim()),
-                Span::styled(
-                    format!(
-                        "{:.0}%",
-                        view.snapshot.cpu.active.clamp(0.0, 1.0) * 100.0
-                    ),
-                    theme.cpu(),
-                ),
-                Span::styled("   gpu ", theme.dim()),
-                Span::styled(
-                    format!(
-                        "{:.0}%",
-                        view.snapshot.gpu.map_or(0.0, |g| g.scaled) * 100.0
-                    ),
-                    theme.gpu(),
-                ),
-            ]),
-            Line::from(Span::styled(" cpu temp", theme.dim())),
-        ]),
-        rows[0],
+        Paragraph::new(Line::from(Span::styled(" cpu temp", theme.dim()))),
+        parts[i],
     );
+    i += 1;
     render_scaled_graph(
         frame,
-        rows[1],
+        parts[i],
         view.cpu_temp_history,
         theme.temp,
         theme,
         Scale::Fixed(100.0),
         Axis::Celsius,
     );
-    if rows.len() > 2 {
+    i += 1;
+    if show_gpu {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(" gpu temp", theme.dim()))),
+            parts[i],
+        );
+        i += 1;
         render_scaled_graph(
             frame,
-            rows[2],
+            parts[i],
             view.gpu_temp_history,
             theme.gpu,
             theme,
             Scale::Fixed(100.0),
             Axis::Celsius,
         );
+        i += 1;
     }
-    if rows.len() > 3 {
-        render_fans(frame, rows[3], &view.snapshot.fans.fans, theme);
+    if fan_h > 0 {
+        render_fans(frame, parts[i], fans, theme);
     }
-    if rows.len() > 4 {
-        let extras = extra_temps(view);
-        render_temp_list(frame, rows[4], &extras, theme);
+    if extra_h > 0 {
+        let extra_i = i + usize::from(fan_h > 0);
+        render_temp_list(
+            frame,
+            parts[extra_i],
+            &extras[..usize::from(extra_h)],
+            theme,
+        );
+    }
+}
+
+fn related_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled(" related  ", theme.dim()),
+        Span::styled("cpu ", theme.dim()),
+        Span::styled(
+            format!("{:.0}%", view.snapshot.cpu.active.clamp(0.0, 1.0) * 100.0),
+            theme.cpu(),
+        ),
+    ];
+    if let Some(gpu) = view.snapshot.gpu {
+        spans.push(Span::styled("   gpu ", theme.dim()));
+        spans.push(Span::styled(
+            format!("{:.0}%", gpu.scaled.clamp(0.0, 1.0) * 100.0),
+            theme.gpu(),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn fan_block_height(n: usize, budget: u16) -> u16 {
+    if n == 0 || budget == 0 {
+        return 0;
+    }
+    let n = u16::try_from(n).unwrap_or(1);
+    if budget >= n.saturating_mul(2) {
+        n.saturating_mul(2)
+    } else {
+        budget.min(n)
     }
 }
 
@@ -210,6 +226,11 @@ fn named_temps(view: &AppView<'_>) -> Vec<(String, f32)> {
     }
     if let Some(c) = sensors.hotspot_c {
         out.push((String::from("hot"), c));
+    }
+    if out.is_empty()
+        && let Some(r) = sensors.readings.first()
+    {
+        out.push((r.name.clone(), r.celsius));
     }
     out
 }
@@ -305,13 +326,64 @@ fn render_fans(frame: &mut Frame, area: Rect, fans: &[FanMetric], theme: &Theme)
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::widgets::tests_support::fixture;
-    use plottypus_core::FanSnapshot;
+    use plottypus_core::{FanSnapshot, GpuSnapshot, TempReading};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     fn line_text(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn paint(view: &AppView<'_>, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render(frame, frame.area(), view, &Theme::default()))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let mut out = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                out.push_str(buf[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    fn thermal_fixture() -> crate::widgets::tests_support::Fixture {
+        let mut fx = fixture("");
+        fx.snap.cpu.active = 0.18;
+        fx.snap.sensors.cpu_c = Some(42.0);
+        fx.snap.sensors.gpu_c = Some(51.0);
+        fx.snap.sensors.hotspot_c = Some(60.0);
+        fx.snap.sensors.readings = vec![
+            TempReading {
+                name: String::from("cpu"),
+                celsius: 42.0,
+            },
+            TempReading {
+                name: String::from("nand"),
+                celsius: 38.0,
+            },
+        ];
+        fx.snap.gpu = Some(GpuSnapshot {
+            scaled: 0.12,
+            temp_c: Some(51.0),
+            ..GpuSnapshot::default()
+        });
+        fx.snap.fans = FanSnapshot {
+            fans: vec![FanMetric {
+                name: String::from("Fan 1"),
+                rpm: 1850,
+                max_rpm: 6000,
+            }],
+        };
+        fx
     }
 
     #[test]
@@ -353,5 +425,70 @@ mod tests {
         assert!(text.contains("42°"), "{text}");
         assert!(!text.contains("rpm"), "{text}");
         assert!(!text.contains('—'), "{text}");
+    }
+
+    #[test]
+    fn named_temps_are_headlines() {
+        let fx = thermal_fixture();
+        let named = named_temps(&fx.view());
+        let extras = extra_temps(&fx.view());
+        assert!(
+            named
+                .iter()
+                .any(|(n, c)| n == "cpu" && (*c - 42.0).abs() < f32::EPSILON)
+        );
+        assert!(named.iter().any(|(n, _)| n == "gpu"));
+        assert!(named.iter().any(|(n, _)| n == "hot"));
+        assert!(extras.iter().any(|(n, _)| n == "nand"));
+        assert!(!extras.iter().any(|(n, _)| n == "cpu"));
+    }
+
+    #[test]
+    fn compact_is_headline_and_graph() {
+        let fx = thermal_fixture();
+        let text = paint(&fx.view(), 36, 8);
+        assert!(text.contains("cpu"), "{text}");
+        assert!(text.contains("42°"), "{text}");
+        assert!(text.contains("gpu"), "{text}");
+        assert!(text.contains("51°"), "{text}");
+        assert!(!text.contains("nand"), "{text}");
+        assert!(!text.contains("related"), "{text}");
+    }
+
+    #[test]
+    fn expanded_fills_with_graphs_related_fans_and_extras() {
+        let mut fx = thermal_fixture();
+        fx.expanded = Some(Panel::Fans);
+        let text = paint(&fx.view(), 48, 24);
+        assert!(text.contains("related"), "{text}");
+        assert!(text.contains("18%"), "{text}");
+        assert!(text.contains("12%"), "{text}");
+        assert!(text.contains("cpu temp"), "{text}");
+        assert!(text.contains("gpu temp"), "{text}");
+        assert!(text.contains("Fan 1"), "{text}");
+        assert!(text.contains("1850"), "{text}");
+        assert!(text.contains("nand"), "{text}");
+        assert!(text.contains("38°"), "{text}");
+    }
+
+    #[test]
+    fn expanded_skips_empty_fan_and_gpu_slots() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Fans);
+        fx.snap.sensors.cpu_c = Some(42.0);
+        let text = paint(&fx.view(), 48, 20);
+        assert!(text.contains("related"), "{text}");
+        assert!(text.contains("cpu temp"), "{text}");
+        assert!(!text.contains("gpu temp"), "{text}");
+        assert!(!text.contains("rpm"), "{text}");
+        assert!(!text.contains("nand"), "{text}");
+    }
+
+    #[test]
+    fn fan_block_uses_content_height() {
+        assert_eq!(fan_block_height(0, 8), 0);
+        assert_eq!(fan_block_height(1, 8), 2);
+        assert_eq!(fan_block_height(2, 3), 2);
+        assert_eq!(fan_block_height(1, 0), 0);
     }
 }

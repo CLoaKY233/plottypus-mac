@@ -285,7 +285,10 @@ pub(crate) mod tests_support {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod render_tests {
-    use plottypus_core::{DiskSnapshot, DiskVolume, FanMetric, FanSnapshot, GpuSnapshot, Surface};
+    use plottypus_core::{
+        ClusterKind, CoreSample, DiskSnapshot, DiskVolume, FanMetric, FanSnapshot, GpuSnapshot,
+        Surface,
+    };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -401,6 +404,20 @@ mod render_tests {
         let mut fx = fixture("");
         fx.expanded = Some(Panel::Cpu);
         fx.snap.cpu.active = 0.5;
+        fx.snap.cpu.cores = vec![
+            CoreSample {
+                kind: ClusterKind::Efficiency,
+                index: 0,
+                scaled: 0.2,
+                active: 0.2,
+            },
+            CoreSample {
+                kind: ClusterKind::Performance,
+                index: 4,
+                scaled: 0.8,
+                active: 0.8,
+            },
+        ];
         let text = paint(&fx.view(), 80, 24);
         assert!(text.contains("cpu"), "{text}");
         assert!(
@@ -408,7 +425,32 @@ mod render_tests {
             "{text}"
         );
         assert!(text.contains("busiest"), "{text}");
+        assert!(text.contains("E0"), "{text}");
+        assert!(text.contains("P4"), "{text}");
         assert!(text.contains("Xcode"), "{text}");
+        assert!(!text.contains("Macintosh"), "{text}");
+    }
+
+    #[test]
+    fn expand_gpu_shows_graphs_and_related() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Gpu);
+        fx.ready = true;
+        fx.snap.gpu = Some(GpuSnapshot {
+            scaled: 0.12,
+            watts: Some(1.1),
+            freq_mhz: Some(461),
+            temp_c: Some(51.0),
+            ..GpuSnapshot::default()
+        });
+        fx.snap.processes[0].gpu = 77.0;
+        let text = paint(&fx.view(), 80, 24);
+        assert!(text.contains("gpu"), "{text}");
+        assert!(text.contains("12%"), "{text}");
+        assert!(text.contains("51°"), "{text}");
+        assert!(text.contains("Xcode"), "{text}");
+        assert!(text.contains("no per-process"), "{text}");
+        assert!(!text.contains("77"), "{text}");
         assert!(!text.contains("Macintosh"), "{text}");
     }
 

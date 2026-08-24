@@ -636,6 +636,27 @@ mod tests {
     }
 
     #[test]
+    fn click_selected_process_opens_detail() {
+        let mut app = App::new().unwrap();
+        app.snapshot.processes = vec![plottypus_core::Process {
+            pid: 7,
+            ppid: 1,
+            name: String::from("Xcode"),
+            cpu: 10.0,
+            mem_bytes: 1,
+            threads: 1,
+            gpu: 0.0,
+        }];
+        app.proc.selected_pid = Some(7);
+        app.proc.selected = 0;
+        app.focus = Focus::Processes;
+        app.handle(Event::Expand).unwrap();
+        assert_eq!(app.detail_pid, Some(7));
+        app.handle(Event::FilterCancel).unwrap();
+        assert!(app.detail_pid.is_none());
+    }
+
+    #[test]
     fn search_question_is_not_a_letter() {
         let mut app = App::new().unwrap();
         app.handle(Event::Search).unwrap();

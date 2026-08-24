@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use crate::theme::Theme;
 use crate::widgets::AppView;
 
-const HELP: [&str; 15] = [
+const HELP: [&str; 14] = [
     "tab / shift-tab          move between boxes",
     "enter                    expand focused box",
     "esc                      close expand / help / search",
@@ -17,62 +17,74 @@ const HELP: [&str; 15] = [
     "/                        search processes",
     "enter on a process       process details",
     "x                        kill selected (then y/n)",
-    "s                        settings (interval, panes)",
+    "s                        settings (sampling, panes, processes)",
     "f                        pause live updates",
     "g / w                    glance / work",
     "q                        quit",
-    "",
 ];
 
 pub fn render(frame: &mut Frame, area: Rect, theme: &Theme) {
-    popup(frame, area, " help ", &HELP, theme);
+    let lines: Vec<Line> = HELP
+        .iter()
+        .map(|s| Line::from(Span::styled((*s).to_owned(), theme.fg())))
+        .collect();
+    popup(frame, area, " help ", &lines, theme);
 }
 
 pub fn render_settings(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let interval = format!("1  interval     {} ms   [ ] cycles 0.5 / 1 / 2 s", view.interval_ms);
-    let gpu = format!("2  gpu pane     {}", on_off(view.show_gpu));
-    let net = format!("3  net pane     {}", on_off(view.show_net));
-    let cores = format!("4  per-core     {}", on_off(view.show_cores));
-    let disk = format!("5  disk pane    {}", on_off(view.show_disk));
-    let fans = format!("6  sensors      {}", on_off(view.show_fans));
-    let sort = format!("7  proc sort    {}", view.sort.label());
-    let threads = format!("8  threads col  {}", on_off(view.show_threads));
-    let lines = [
-        " sampling",
-        interval.as_str(),
-        "",
-        " panes",
-        gpu.as_str(),
-        net.as_str(),
-        disk.as_str(),
-        fans.as_str(),
-        cores.as_str(),
-        "",
-        " processes",
-        sort.as_str(),
-        threads.as_str(),
-        "",
-        " ↗ expands a box · click a process twice for details",
-        " esc  close",
-    ];
+    let lines: Vec<Line> = settings_lines(view)
+        .into_iter()
+        .map(|s| {
+            let style = if is_section(&s) {
+                theme.dim()
+            } else {
+                theme.fg()
+            };
+            Line::from(Span::styled(s, style))
+        })
+        .collect();
     popup(frame, area, " settings ", &lines, theme);
+}
+
+fn settings_lines(view: &AppView<'_>) -> Vec<String> {
+    vec![
+        String::from(" sampling"),
+        format!(
+            "1  interval     {} ms   [ / ]  0.5 / 1 / 2 s",
+            view.interval_ms
+        ),
+        String::new(),
+        String::from(" panes"),
+        format!("2  gpu pane     {}", on_off(view.show_gpu)),
+        format!("3  net pane     {}", on_off(view.show_net)),
+        format!("5  disk pane    {}", on_off(view.show_disk)),
+        format!("6  sensors      {}", on_off(view.show_fans)),
+        format!("4  per-core     {}", on_off(view.show_cores)),
+        String::new(),
+        String::from(" processes"),
+        format!("7  proc sort    {}", view.sort.label()),
+        format!("8  threads col  {}", on_off(view.show_threads)),
+        String::new(),
+        String::from(" ↗ expands a box · click a process twice for details"),
+        String::from(" esc  close"),
+    ]
+}
+
+fn is_section(line: &str) -> bool {
+    matches!(line.trim(), "sampling" | "panes" | "processes")
 }
 
 fn on_off(on: bool) -> &'static str {
     if on { "on" } else { "off" }
 }
 
-fn popup(frame: &mut Frame, area: Rect, title: &str, lines: &[&str], theme: &Theme) {
-    let text: Vec<Line> = lines
-        .iter()
-        .map(|s| Line::from(Span::styled((*s).to_owned(), theme.fg())))
-        .collect();
+fn popup(frame: &mut Frame, area: Rect, title: &str, lines: &[Line<'static>], theme: &Theme) {
     let width = 62.min(area.width.saturating_sub(2));
-    let height = u16::try_from(text.len() + 2).unwrap_or(8).min(area.height);
+    let height = u16::try_from(lines.len() + 2).unwrap_or(8).min(area.height);
     let rect = centered(area, width, height);
     frame.render_widget(Clear, rect);
     frame.render_widget(
-        Paragraph::new(text).block(
+        Paragraph::new(lines.to_vec()).block(
             Block::bordered()
                 .border_type(BorderType::Rounded)
                 .title(title.to_owned())
@@ -110,5 +122,27 @@ mod tests {
         assert!(joined.contains("click a box              focus it"));
         assert!(!joined.contains("click a box              expand"));
         assert!(!joined.contains("fullscreen"));
+    }
+
+    #[test]
+    fn settings_has_sampling_panes_processes() {
+        let fx = crate::widgets::tests_support::fixture("");
+        let lines = settings_lines(&fx.view());
+        let joined = lines.join("\n");
+        let sampling = joined.find("sampling");
+        let panes = joined.find("panes");
+        let processes = joined.find("processes");
+        assert!(sampling.is_some(), "{joined}");
+        assert!(panes.is_some(), "{joined}");
+        assert!(processes.is_some(), "{joined}");
+        assert!(sampling < panes && panes < processes, "{joined}");
+        assert!(joined.contains("interval"), "{joined}");
+        assert!(joined.contains("[ / ]"), "{joined}");
+        assert!(joined.contains("gpu pane"), "{joined}");
+        assert!(joined.contains("proc sort"), "{joined}");
+        assert!(is_section(" sampling"));
+        assert!(is_section(" panes"));
+        assert!(is_section(" processes"));
+        assert!(!is_section("1  interval"));
     }
 }
