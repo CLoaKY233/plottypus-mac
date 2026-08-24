@@ -1,0 +1,15 @@
+[package]
+name = "plottypus-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Ratatui widgets and layout for plottypus"
+
+[dependencies]
+plottypus-core.workspace = true
+ratatui.workspace = true
+unicode-width.workspace = true
+
+[lints]
+workspace = true

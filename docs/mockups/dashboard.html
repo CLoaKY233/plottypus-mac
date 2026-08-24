@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>plottypus — Work + Glance</title>
+  <style>
+    :root {
+      --bg: #0b0d10;
+      --fg: #c8d0d8;
+      --dim: #5c6770;
+      --mute: #3a424a;
+      --title: #e8eef2;
+      --cpu: #5eead4;
+      --mem: #9aa3ab;
+      --gpu: #c084fc;
+      --ok: #4ade80;
+      --warn: #fbbf24;
+      --crit: #f87171;
+      --sel: color-mix(in srgb, #fbbf24 14%, transparent);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: #050607;
+      color: var(--fg);
+      font: 13px/1.4 "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    }
+    .page { max-width: 980px; margin: 0 auto; padding: 36px 20px 72px; }
+    h1 {
+      font-size: 12px; font-weight: 500; color: var(--dim);
+      letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 8px;
+    }
+    .lede { color: var(--dim); margin: 0 0 28px; max-width: 68ch; }
+    h2 {
+      font-size: 12px; font-weight: 500; color: var(--dim);
+      margin: 36px 0 10px; letter-spacing: 0.06em;
+    }
+    .term {
+      background: var(--bg);
+      border: 1px solid #161b20;
+      border-radius: 12px;
+      padding: 12px 14px 8px;
+      box-shadow: 0 20px 70px rgba(0,0,0,0.45);
+    }
+    .term.small { max-width: 560px; }
+    .box {
+      border: 1px solid #1a2026;
+      padding: 6px 8px 8px;
+    }
+    .box.focus { border-color: color-mix(in srgb, var(--cpu) 35%, #1a2026); }
+    .hd {
+      display: flex; justify-content: space-between; gap: 12px;
+      color: var(--title); margin-bottom: 4px; white-space: nowrap;
+    }
+    .hd .name { color: var(--dim); }
+    .hd .pri { color: var(--title); }
+    .hd .w { color: var(--cpu); }
+    .hd .right { color: var(--dim); }
+    .hd .warn { color: var(--warn); }
+    .row { display: flex; gap: 18px; }
+    .grow { flex: 1; min-width: 0; }
+    .graph { letter-spacing: -0.05em; line-height: 1.05; font-size: 14px; }
+    .graph .a { color: color-mix(in srgb, var(--cpu) 55%, #1a2026); }
+    .graph .b { color: var(--cpu); }
+    .sub { color: var(--dim); margin-top: 4px; }
+    .sub em { color: var(--fg); font-style: normal; }
+    .mem { color: var(--dim); padding: 6px 8px; border: 1px solid #1a2026; border-top: 0; }
+    .mem i { color: var(--ok); font-style: normal; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { text-align: left; padding: 2px 10px 2px 0; }
+    th { color: var(--mute); font-weight: 400; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    td.dim { color: var(--dim); }
+    tr.sel td { background: var(--sel); color: var(--title); }
+    .foot { padding: 8px 2px 2px; color: var(--mute); }
+    .foot kbd { color: var(--dim); font: inherit; }
+    .note { margin-top: 20px; color: var(--mute); font-size: 12px; }
+    .glance-row { display: grid; grid-template-columns: 11ch 1fr 18ch; gap: 8px; padding: 3px 0; }
+    .glance-row .k { color: var(--dim); }
+    .glance-row .n { color: var(--title); }
+    .glance-row .g { color: color-mix(in srgb, var(--cpu) 70%, #333); letter-spacing: -0.05em; }
+    .glance-row.gpu .g { color: color-mix(in srgb, var(--gpu) 70%, #333); }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <h1>plottypus</h1>
+    <p class="lede">
+      Revised default. Quiet chrome, one hero, process table gets the pixels.
+      Titles are three tokens. Footer is three keys. Idle graphs stay empty.
+    </p>
+
+    <h2>Work · wide default</h2>
+    <div class="term">
+      <div class="box focus">
+        <div class="hd">
+          <span><span class="name">cpu</span>  <span class="pri">18%</span>  <span class="w">8.2W</span></span>
+          <span class="right">42° · nominal</span>
+        </div>
+        <div class="row">
+          <div class="grow graph">
+            <div class="a">⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣤⣾⣿</div>
+            <div class="b">⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣤⣶⣿⣿⣿⣿⣿</div>
+          </div>
+          <div class="sub" style="width: 28ch;">
+            E ▂▂▃▂▂▁&nbsp;&nbsp;P █▆▄▂██<br />
+            busy 41% · 3.2 GHz · gpu 12% 1.1W
+          </div>
+        </div>
+      </div>
+      <div class="mem">mem  22 / 36G  <i>●</i></div>
+      <div class="box" style="border-top:0">
+        <table>
+          <thead>
+            <tr>
+              <th>pid</th><th>name</th>
+              <th class="num">cpu</th><th class="num">mem</th><th class="num">thr</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="dim">904</td><td>Xcode</td>
+              <td class="num">48.1</td><td class="num">4.2G</td><td class="num">62</td>
+            </tr>
+            <tr class="sel">
+              <td class="dim">312</td><td>WindowServer</td>
+              <td class="num">5.2</td><td class="num">312M</td><td class="num">18</td>
+            </tr>
+            <tr>
+              <td class="dim">448</td><td>plottypus</td>
+              <td class="num">0.6</td><td class="num">16M</td><td class="num">6</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="foot"><kbd>?</kbd> help &nbsp; <kbd>/</kbd> filter &nbsp; <kbd>q</kbd> quit</div>
+    </div>
+
+    <h2>Glance · small pane (automatic)</h2>
+    <div class="term small">
+      <div class="box">
+        <div class="hd">
+          <span class="name">M4 Pro</span>
+          <span class="right">42°</span>
+        </div>
+        <div class="glance-row">
+          <div><span class="k">cpu</span> <span class="n">18%</span> 8.2W</div>
+          <div class="g">⠀⠀⠀⣀⣤⣾⣿</div>
+          <div class="k">busy 41%</div>
+        </div>
+        <div class="glance-row gpu">
+          <div><span class="k">gpu</span> <span class="n">12%</span> 1.1W</div>
+          <div class="g">⠀⠀⣀⣄⡀⠀⠀</div>
+          <div class="k">461 MHz</div>
+        </div>
+        <div class="glance-row">
+          <div><span class="k">ane</span> <span class="n">0%</span> 0.0W</div>
+          <div class="g">⠀⠀⠀⠀⠀⠀⠀</div>
+          <div class="k"></div>
+        </div>
+        <div class="sub">mem  22 / 36G  ●</div>
+      </div>
+      <div class="foot"><kbd>?</kbd> &nbsp; <kbd>q</kbd></div>
+    </div>
+
+    <p class="note">
+      Spec: docs/research/05-product-design.md · Critique: 06-product-critique.md
+    </p>
+  </div>
+</body>
+</html>
