@@ -180,11 +180,11 @@ mod macos {
         let bsd = bsd_info(info.pid);
         let (uid, status, bsd_start) = match &bsd {
             Some(bsd) => (
-                bsd.pbi_uid,
+                Some(bsd.pbi_uid),
                 status_word(bsd.pbi_status),
                 i64::try_from(bsd.pbi_start_tvsec).unwrap_or(0),
             ),
-            None => (0, "", 0),
+            None => (None, "", 0),
         };
         let start_unix = if bsd_start > 0 {
             bsd_start
@@ -195,14 +195,20 @@ mod macos {
         let prev = collector.cache.remove(&info.pid);
         let same_run = prev.as_ref().is_some_and(|c| c.start_sec == info.start_sec);
         let (name, command) = if same_run {
-            prev.as_ref().filter(|c| !c.name.is_empty()).map_or_else(
-                || resolve_identity(info.pid, &info.comm),
-                |c| (c.name.clone(), c.command.clone()),
-            )
+            match prev.as_ref().filter(|c| !c.name.is_empty()) {
+                Some(cached) => {
+                    let command = cached
+                        .command
+                        .clone()
+                        .or_else(|| resolve_identity(info.pid, &info.comm).1);
+                    (cached.name.clone(), command)
+                }
+                None => resolve_identity(info.pid, &info.comm),
+            }
         } else {
             resolve_identity(info.pid, &info.comm)
         };
-        let user = collector.user_name(uid);
+        let user = uid.map_or_else(|| String::from("—"), |uid| collector.user_name(uid));
 
         let task = task_info(info.pid);
         let (cpu, cpu_ns, mem_bytes, threads) = match task {
@@ -358,7 +364,7 @@ mod macos {
     fn resolve_identity(pid: u32, comm: &str) -> (String, Option<String>) {
         let argv0 = pid_argv0(pid);
         let path = pid_path(pid);
-        let command = argv0.clone().or_else(|| path.clone());
+        let command = path.clone().or_else(|| argv0.clone());
         let name = preferred_name(pid, argv0.as_deref(), path.as_deref(), comm);
         (name, command)
     }

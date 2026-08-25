@@ -11,5 +11,5 @@ pub use layout::{Degrade, Hit, LayoutFlags, LayoutPlan, Panel, Region, hit_test,
 pub use theme::Theme;
 pub use widgets::{
     AppView, DetailAction, Focus, ProcView, detail_actions, detail_rect, filtered_processes,
-    inner_process_area, render_app,
+    footer_hit, inner_process_area, render_app,
 };

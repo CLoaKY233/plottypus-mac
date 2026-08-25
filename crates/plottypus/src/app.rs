@@ -7,7 +7,7 @@ use plottypus_core::{
 use plottypus_metrics::{Signal, send_signal};
 use plottypus_ui::{
     AppView, DetailAction, Focus, Hit, LayoutFlags, Panel, ProcView, detail_actions, detail_rect,
-    filtered_processes, hit_test, render_app,
+    filtered_processes, footer_hit, hit_test, plan, render_app,
 };
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -51,8 +51,8 @@ fn run_inner(terminal: &mut AppTerminal) -> (Result<()>, Option<String>) {
         let modes = event::Modes {
             searching: app.searching,
             settings: app.settings,
-            expanded: app.expanded.is_some(),
             detail: app.detail_pid.is_some(),
+            confirm: app.confirm_kill,
         };
         match event::poll(timeout, modes) {
             Ok(Some(Event::Quit)) => break,
@@ -456,6 +456,31 @@ impl App {
 
     fn on_click(&mut self, col: u16, row: u16) {
         let flags = self.layout_flags();
+        let planned = plan(self.last_area, self.effective_surface(), flags);
+        if row == planned.footer.y {
+            match footer_hit(&self.view(), planned.footer, col, row) {
+                Some(Hit::Help) => self.help = !self.help,
+                Some(Hit::Search) => {
+                    self.searching = true;
+                    self.focus = Focus::Search;
+                }
+                Some(Hit::Kill) => {
+                    if self.can_kill() {
+                        self.pending_signal = Signal::Term;
+                        self.arm_kill();
+                    }
+                }
+                Some(Hit::ExpandClose) => {
+                    if self.detail_pid.is_some() {
+                        self.detail_pid = None;
+                    } else {
+                        self.expanded = None;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         if self.detail_pid.is_some()
             && let Some(proc_area) =
                 plottypus_ui::inner_process_area(self.last_area, self.effective_surface(), flags)
@@ -505,6 +530,7 @@ impl App {
             Some(Hit::Settings) => self.settings = !self.settings,
             Some(Hit::Kill) => {
                 if self.can_kill() {
+                    self.pending_signal = Signal::Term;
                     self.arm_kill();
                 }
             }
@@ -596,12 +622,24 @@ impl App {
             Event::ConfirmYes => {
                 if let Some(pid) = self.confirm_pid.take() {
                     let signal = self.pending_signal;
+                    let name = self
+                        .snapshot
+                        .processes
+                        .iter()
+                        .find(|p| p.pid == pid)
+                        .map_or("process", |p| p.name.as_str());
                     match send_signal(pid, signal) {
-                        Ok(()) => self.set_status(format!("sent {} to {pid}", signal.label())),
+                        Ok(()) => {
+                            self.set_status(format!("sent {} to {name} ({pid})", signal.label()));
+                        }
                         Err(err) => self.set_status(err.to_string()),
+                    }
+                    if self.detail_pid == Some(pid) {
+                        self.detail_pid = None;
                     }
                 }
                 self.confirm_kill = false;
+                self.pending_signal = Signal::Term;
             }
             Event::ConfirmNo | Event::Kill => self.cancel_kill(),
             _ => {}
@@ -941,6 +979,32 @@ mod tests {
         );
         app.handle(Event::ConfirmNo);
         assert!(!app.confirm_kill);
+    }
+
+    #[test]
+    fn confirm_yes_from_detail_closes_the_card() {
+        let mut app = App::new().unwrap();
+        let mk = |pid: u32, name: &str| plottypus_core::Process {
+            pid,
+            ppid: 1,
+            name: name.to_owned(),
+            cpu: 1.0,
+            mem_bytes: 1,
+            threads: 1,
+            gpu: 0.0,
+            user: String::from("u"),
+            command: None,
+            status: "sleeping",
+            start_unix: 0,
+            cpu_spark: Vec::new(),
+        };
+        app.snapshot.processes = vec![mk(11, "target"), mk(22, "other")];
+        app.detail_pid = Some(11);
+        app.handle(Event::DetailKill);
+        assert!(app.confirm_kill);
+        app.handle(Event::ConfirmYes);
+        assert!(!app.confirm_kill);
+        assert!(app.detail_pid.is_none());
     }
 
     #[test]

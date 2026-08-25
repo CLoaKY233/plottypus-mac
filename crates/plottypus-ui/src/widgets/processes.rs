@@ -360,7 +360,7 @@ fn search_line(view: &AppView<'_>, rows: &[Process], theme: &Theme) -> Line<'sta
     if active {
         query.push('▌');
     } else if query.is_empty() {
-        query = String::from("type to filter");
+        query = String::from("/ to filter");
     }
     let label = if active { " search " } else { " / search " };
     Line::from(vec![
@@ -431,6 +431,10 @@ fn tree_rows(processes: &[Process], filter: &str, sort: plottypus_core::ProcSort
         for proc in processes {
             if proc.name.to_ascii_lowercase().contains(&needle)
                 || proc.pid.to_string().contains(&needle)
+                || proc
+                    .command
+                    .as_ref()
+                    .is_some_and(|c| c.to_ascii_lowercase().contains(&needle))
             {
                 let mut walk = Some(proc.pid);
                 while let Some(pid) = walk {
@@ -520,6 +524,10 @@ pub fn filter_sort_by(
             needle.is_empty()
                 || proc.name.to_ascii_lowercase().contains(&needle)
                 || proc.pid.to_string().contains(&needle)
+                || proc
+                    .command
+                    .as_ref()
+                    .is_some_and(|c| c.to_ascii_lowercase().contains(&needle))
         })
         .cloned()
         .collect();

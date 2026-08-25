@@ -21,7 +21,19 @@ fn footer_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
         };
         let who = view.confirm_pid.map_or_else(
             || format!(" {signal}?  "),
-            |pid| format!(" {signal} pid {pid}?  "),
+            |pid| {
+                let name = view
+                    .snapshot
+                    .processes
+                    .iter()
+                    .find(|p| p.pid == pid)
+                    .map(|p| p.name.as_str())
+                    .filter(|n| !n.is_empty());
+                match name {
+                    Some(name) => format!(" {signal} {name} ({pid})?  "),
+                    None => format!(" {signal} pid {pid}?  "),
+                }
+            },
         );
         return Line::from(vec![
             Span::styled(who, theme.title()),
@@ -71,6 +83,48 @@ fn key(spans: &mut Vec<Span<'static>>, theme: &Theme, k: &'static str, verb: &'s
     spans.push(Span::raw("  "));
     spans.push(Span::styled(k.to_owned(), theme.title()));
     spans.push(Span::styled(format!(" {verb}"), theme.dim()));
+}
+
+#[must_use]
+pub fn footer_hit(
+    view: &AppView<'_>,
+    area: Rect,
+    col: u16,
+    row: u16,
+) -> Option<crate::layout::Hit> {
+    if row != area.y || col < area.x || col >= area.x.saturating_add(area.width) {
+        return None;
+    }
+    if view.confirm_kill {
+        return None;
+    }
+    let mut x = area.x;
+    for (k, verb, hit) in footer_chips(view) {
+        let w = 2 + k.len() as u16 + 1 + verb.len() as u16;
+        if col >= x && col < x.saturating_add(w) {
+            return Some(hit);
+        }
+        x = x.saturating_add(w);
+    }
+    None
+}
+
+fn footer_chips(view: &AppView<'_>) -> Vec<(&'static str, &'static str, crate::layout::Hit)> {
+    use crate::layout::Hit;
+    let mut chips = Vec::new();
+    if view.detail_pid.is_some() {
+        chips.push(("esc", "close", Hit::ExpandClose));
+    } else if view.expanded.is_some() {
+        chips.push(("esc", "home", Hit::ExpandClose));
+    } else {
+        chips.push(("?", "help", Hit::Help));
+        if process_actions_visible(view) {
+            chips.push(("/", "search", Hit::Search));
+            chips.push(("x", "kill", Hit::Kill));
+        }
+    }
+    chips.push(("q", "quit", Hit::Quit));
+    chips
 }
 
 #[cfg(test)]
@@ -136,8 +190,21 @@ mod tests {
         let t = text(&fx.view());
         assert!(t.contains("904"), "{t}");
         assert!(t.contains("KILL"), "{t}");
+        assert!(t.contains("Xcode"), "{t}");
         assert!(!t.contains("TERM pid 1"), "{t}");
         assert!(t.contains("yes"));
+    }
+
+    #[test]
+    fn footer_hit_only_paints_visible_chips() {
+        use crate::layout::Hit;
+        let mut fx = fixture("");
+        fx.focus = Focus::Cpu;
+        let area = Rect::new(0, 20, 80, 1);
+        assert_eq!(footer_hit(&fx.view(), area, 2, 20), Some(Hit::Help));
+        assert_eq!(footer_hit(&fx.view(), area, 30, 20), None);
+        fx.focus = Focus::Processes;
+        assert_eq!(footer_hit(&fx.view(), area, 14, 20), Some(Hit::Search));
     }
 
     #[test]

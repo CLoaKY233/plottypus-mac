@@ -47,8 +47,8 @@ pub enum Event {
 pub struct Modes {
     pub searching: bool,
     pub settings: bool,
-    pub expanded: bool,
     pub detail: bool,
+    pub confirm: bool,
 }
 
 pub fn poll(timeout: Duration, modes: Modes) -> Result<Option<Event>> {
@@ -57,13 +57,7 @@ pub fn poll(timeout: Duration, modes: Modes) -> Result<Option<Event>> {
     }
     match event::read().map_err(|err| Error::terminal(err.to_string()))? {
         TermEvent::Resize(_, _) => Ok(Some(Event::Resize)),
-        TermEvent::Key(key) if key.kind == KeyEventKind::Press => Ok(map_key_in_mode(
-            key,
-            modes.searching,
-            modes.settings,
-            modes.expanded,
-            modes.detail,
-        )),
+        TermEvent::Key(key) if key.kind == KeyEventKind::Press => Ok(map_key_in_mode(key, modes)),
         TermEvent::Mouse(mouse) => Ok(map_mouse(mouse.kind, mouse.column, mouse.row)),
         _ => Ok(None),
     }
@@ -80,14 +74,7 @@ fn map_mouse(kind: MouseEventKind, col: u16, row: u16) -> Option<Event> {
     }
 }
 
-pub(crate) fn map_key_in_mode(
-    key: KeyEvent,
-    searching: bool,
-    settings: bool,
-    expanded: bool,
-    detail: bool,
-) -> Option<Event> {
-    let _ = expanded;
+pub(crate) fn map_key_in_mode(key: KeyEvent, modes: Modes) -> Option<Event> {
     if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
         return Some(Event::Quit);
     }
@@ -97,17 +84,28 @@ pub(crate) fn map_key_in_mode(
     if matches!(key.code, KeyCode::Char('?')) {
         return Some(Event::Help);
     }
-    if settings {
+    if modes.confirm {
+        return match key.code {
+            KeyCode::Char('y') => Some(Event::ConfirmYes),
+            KeyCode::Char('n' | 'x') => Some(Event::ConfirmNo),
+            KeyCode::Char('q') => Some(Event::Quit),
+            _ => None,
+        };
+    }
+    if modes.settings {
         return map_settings_key(key);
     }
-    if searching {
+    if modes.searching {
         return map_search_key(key);
     }
-    if detail {
+    if modes.detail {
         return match key.code {
             KeyCode::Char('t') => Some(Event::DetailTerm),
             KeyCode::Char('k') => Some(Event::DetailKill),
             KeyCode::Char('i') => Some(Event::DetailInterrupt),
+            KeyCode::Char('q') => Some(Event::Quit),
+            KeyCode::Char('j') | KeyCode::Down => Some(Event::Move(1)),
+            KeyCode::Up => Some(Event::Move(-1)),
             KeyCode::Enter => Some(Event::FilterCancel),
             _ => None,
         };
@@ -172,10 +170,19 @@ mod tests {
         KeyEvent::from(KeyCode::Char(c))
     }
 
+    fn modes(searching: bool, detail: bool) -> Modes {
+        Modes {
+            searching,
+            settings: false,
+            detail,
+            confirm: false,
+        }
+    }
+
     #[test]
     fn question_always_help() {
         assert_eq!(
-            map_key_in_mode(key('?'), true, false, false, false),
+            map_key_in_mode(key('?'), modes(true, false)),
             Some(Event::Help)
         );
     }
@@ -183,11 +190,11 @@ mod tests {
     #[test]
     fn q_in_search_is_a_letter() {
         assert_eq!(
-            map_key_in_mode(key('q'), true, false, false, false),
+            map_key_in_mode(key('q'), modes(true, false)),
             Some(Event::FilterChar('q'))
         );
         assert_eq!(
-            map_key_in_mode(key('q'), false, false, false, false),
+            map_key_in_mode(key('q'), modes(false, false)),
             Some(Event::Quit)
         );
     }
@@ -195,7 +202,7 @@ mod tests {
     #[test]
     fn x_kills() {
         assert_eq!(
-            map_key_in_mode(key('x'), false, false, false, false),
+            map_key_in_mode(key('x'), modes(false, false)),
             Some(Event::Kill)
         );
     }
@@ -203,15 +210,15 @@ mod tests {
     #[test]
     fn tab_enter_backtab() {
         assert_eq!(
-            map_key_in_mode(KeyEvent::from(KeyCode::Tab), false, false, false, false),
+            map_key_in_mode(KeyEvent::from(KeyCode::Tab), modes(false, false)),
             Some(Event::NextPanel)
         );
         assert_eq!(
-            map_key_in_mode(KeyEvent::from(KeyCode::BackTab), false, false, false, false),
+            map_key_in_mode(KeyEvent::from(KeyCode::BackTab), modes(false, false)),
             Some(Event::PrevPanel)
         );
         assert_eq!(
-            map_key_in_mode(KeyEvent::from(KeyCode::Enter), false, false, false, false),
+            map_key_in_mode(KeyEvent::from(KeyCode::Enter), modes(false, false)),
             Some(Event::Expand)
         );
     }
@@ -219,32 +226,51 @@ mod tests {
     #[test]
     fn detail_mode_routes_actions() {
         assert_eq!(
-            map_key_in_mode(key('t'), false, false, false, true),
+            map_key_in_mode(key('t'), modes(false, true)),
             Some(Event::DetailTerm)
         );
         assert_eq!(
-            map_key_in_mode(key('k'), false, false, false, true),
+            map_key_in_mode(key('k'), modes(false, true)),
             Some(Event::DetailKill)
         );
         assert_eq!(
-            map_key_in_mode(key('i'), false, false, false, true),
+            map_key_in_mode(key('i'), modes(false, true)),
             Some(Event::DetailInterrupt)
         );
         assert_eq!(
-            map_key_in_mode(key('x'), false, false, false, true),
+            map_key_in_mode(key('x'), modes(false, true)),
             None,
             "x stays out of the popup"
         );
     }
 
     #[test]
+    fn confirm_wins_over_detail() {
+        let confirm = Modes {
+            searching: false,
+            settings: false,
+            detail: true,
+            confirm: true,
+        };
+        assert_eq!(map_key_in_mode(key('y'), confirm), Some(Event::ConfirmYes));
+        assert_eq!(map_key_in_mode(key('n'), confirm), Some(Event::ConfirmNo));
+        assert_eq!(map_key_in_mode(key('k'), confirm), None);
+    }
+
+    #[test]
     fn esc_is_always_cancel() {
+        let expanded = Modes {
+            searching: false,
+            settings: false,
+            detail: false,
+            confirm: false,
+        };
         assert_eq!(
-            map_key_in_mode(KeyEvent::from(KeyCode::Esc), false, false, true, false),
+            map_key_in_mode(KeyEvent::from(KeyCode::Esc), expanded),
             Some(Event::FilterCancel)
         );
         assert_eq!(
-            map_key_in_mode(KeyEvent::from(KeyCode::Esc), false, false, false, false),
+            map_key_in_mode(KeyEvent::from(KeyCode::Esc), modes(false, false)),
             Some(Event::FilterCancel)
         );
     }

@@ -141,6 +141,7 @@ impl AppView<'_> {
     }
 }
 
+pub use footer::footer_hit;
 pub use processes::filtered as filtered_processes;
 pub use processes::{DetailAction, detail_actions, detail_rect};
 

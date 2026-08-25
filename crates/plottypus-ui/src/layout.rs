@@ -452,18 +452,7 @@ pub fn hit_test(
 ) -> Option<Hit> {
     let planned = plan(area, surface, flags);
     if row == planned.footer.y {
-        let x = col.saturating_sub(planned.footer.x);
-        return Some(if x < 12 {
-            Hit::Help
-        } else if x < 24 {
-            Hit::Search
-        } else if x < 36 {
-            Hit::Kill
-        } else if x < 50 {
-            Hit::Settings
-        } else {
-            Hit::Quit
-        });
+        return None;
     }
     if let Some(close) = planned.close_hit()
         && contains(close, col, row)
