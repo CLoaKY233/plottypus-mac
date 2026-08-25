@@ -5,7 +5,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
 
-use crate::chrome::{panel_block, push_kv, push_token};
+use crate::chrome::{cell, panel_block, push_kv, push_token};
 use crate::layout::Panel;
 use crate::spark;
 use crate::theme::Theme;
@@ -43,9 +43,9 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         };
         let mut cells = vec![
             Cell::from(Line::from(matched_spans(
-                &proc.pid.to_string(),
+                &format!("{:>7}", proc.pid),
                 &needle,
-                theme.fg(),
+                theme.dim(),
                 hit_style,
             ))),
             Cell::from(Line::from(matched_spans(
@@ -54,12 +54,18 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
                 theme.fg(),
                 hit_style,
             ))),
-            Cell::from(format!("{:.1}", proc.cpu)),
-            Cell::from(gpu),
-            Cell::from(bytes_short(proc.mem_bytes)),
+            Cell::from(Span::styled(format!("{:>6.1}", proc.cpu), theme.cpu())),
+            Cell::from(Span::styled(format!("{gpu:>5}"), theme.dim())),
+            Cell::from(Span::styled(
+                format!("{:>7}", bytes_short(proc.mem_bytes)),
+                theme.fg(),
+            )),
         ];
         if view.show_threads {
-            cells.push(Cell::from(proc.threads.to_string()));
+            cells.push(Cell::from(Span::styled(
+                format!("{:>4}", proc.threads),
+                theme.dim(),
+            )));
         }
         Row::new(cells)
     });
@@ -67,20 +73,26 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     let mut widths = vec![
         Constraint::Length(7),
         Constraint::Fill(1),
+        Constraint::Length(7),
         Constraint::Length(6),
-        Constraint::Length(5),
         Constraint::Length(8),
     ];
-    let mut headers = vec!["pid", "name", "cpu%", "gpu", "mem"];
+    let mut headers = vec![
+        sort_header("pid", view.sort == plottypus_core::ProcSort::Pid),
+        String::from("name"),
+        sort_header("cpu%", view.sort == plottypus_core::ProcSort::Cpu),
+        String::from("  gpu"),
+        sort_header("mem", view.sort == plottypus_core::ProcSort::Mem),
+    ];
     if view.show_threads {
         widths.push(Constraint::Length(5));
-        headers.push("thr");
+        headers.push(String::from(" thr"));
     }
 
     let table = Table::new(table_rows, widths)
         .header(Row::new(headers).style(theme.dim()))
         .row_highlight_style(theme.selected())
-        .column_spacing(1);
+        .column_spacing(2);
 
     let mut state = TableState::default();
     if !rows.is_empty() {
@@ -101,12 +113,23 @@ pub enum DetailAction {
     Close,
 }
 
+const ACTION_CHIPS: [(&str, &str, DetailAction); 4] = [
+    ("t", "term", DetailAction::Term),
+    ("k", "kill", DetailAction::Kill),
+    ("i", "interrupt", DetailAction::Interrupt),
+    ("esc", "close", DetailAction::Close),
+];
+
 pub fn detail_rect(area: Rect) -> Rect {
-    let width = 72.min(area.width.saturating_sub(2));
-    let height = 11.min(area.height);
+    let pad = 1u16;
+    let width = area.width.saturating_sub(pad.saturating_mul(2)).max(22);
+    let room = area.height.saturating_sub(pad);
+    let height = (area.height.saturating_mul(3) / 4)
+        .clamp(16.min(room), room)
+        .max(1);
     Rect {
-        x: area.x + area.width.saturating_sub(width) / 2,
-        y: area.y + area.height.saturating_sub(height) / 2,
+        x: area.x.saturating_add(pad),
+        y: area.y.saturating_add(pad),
         width,
         height,
     }
@@ -114,17 +137,12 @@ pub fn detail_rect(area: Rect) -> Rect {
 
 pub fn detail_actions(area: Rect) -> Vec<(Rect, DetailAction)> {
     let rect = detail_rect(area);
-    let footer_y = rect.y + rect.height - 2;
-    let labels = [
-        (" t term", DetailAction::Term),
-        (" k kill", DetailAction::Kill),
-        (" i interrupt", DetailAction::Interrupt),
-        (" esc close", DetailAction::Close),
-    ];
+    let inner_x = rect.x.saturating_add(1);
+    let footer_y = rect.y.saturating_add(rect.height.saturating_sub(2));
     let mut out = Vec::new();
-    let mut cursor = rect.x.saturating_add(1);
-    for (label, action) in labels {
-        let w = label.chars().count() as u16;
+    let mut cursor = inner_x;
+    for (key, verb, action) in ACTION_CHIPS {
+        let w = 3 + key.len() as u16 + 1 + verb.len() as u16;
         out.push((
             Rect {
                 x: cursor,
@@ -134,9 +152,17 @@ pub fn detail_actions(area: Rect) -> Vec<(Rect, DetailAction)> {
             },
             action,
         ));
-        cursor = cursor.saturating_add(w + 3);
+        cursor = cursor.saturating_add(w);
     }
     out
+}
+
+fn sort_header(label: &str, active: bool) -> String {
+    if active {
+        format!("{label}↓")
+    } else {
+        label.to_owned()
+    }
 }
 
 fn started_ago(start_unix: i64, now_unix: i64) -> String {
@@ -172,99 +198,200 @@ fn render_detail(frame: &mut Frame, area: Rect, view: &AppView<'_>, pid: u32, th
     let Some(proc) = view.snapshot.processes.iter().find(|p| p.pid == pid) else {
         return;
     };
-    let now = now_unix();
-    let parent: String = view
+    let rect = detail_rect(area);
+    frame.render_widget(ratatui::widgets::Clear, rect);
+    let title = Line::from(Span::styled(
+        format!(" process  {}", proc.name),
+        theme.dim(),
+    ));
+    let block = ratatui::widgets::Block::bordered()
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .title(title)
+        .border_style(theme.border(true));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    render_dossier(frame, inner, view, proc, theme);
+}
+
+fn render_dossier(
+    frame: &mut Frame,
+    area: Rect,
+    view: &AppView<'_>,
+    proc: &Process,
+    theme: &Theme,
+) {
+    let show_spark = !proc.cpu_spark.is_empty() && area.height >= 10;
+    let show_family = area.height >= 12;
+    let show_command = area.height >= 8;
+    let mut weights = vec![Constraint::Length(5)];
+    if show_command {
+        weights.push(Constraint::Length(3));
+    }
+    if show_spark {
+        weights.push(Constraint::Fill(2));
+    }
+    if show_family {
+        weights.push(Constraint::Length(3));
+    }
+    weights.push(Constraint::Length(1));
+    let rows = Layout::vertical(weights).split(area);
+    let bands = Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).split(rows[0]);
+    paint_identity(frame, bands[0], view, proc, theme);
+    paint_live(frame, bands[1], proc, theme);
+    let mut i = 1;
+    if show_command {
+        paint_command(frame, rows[i], proc, theme);
+        i += 1;
+    }
+    if show_spark {
+        let plot = cell(frame, rows[i], "cpu", theme);
+        render_cpu_spark(frame, plot, &proc.cpu_spark, theme);
+        i += 1;
+    }
+    if show_family {
+        paint_family(frame, rows[i], view, proc, theme);
+        i += 1;
+    }
+    if let Some(actions) = rows.get(i) {
+        render_action_footer(frame, *actions, theme);
+    }
+}
+
+fn paint_identity(
+    frame: &mut Frame,
+    area: Rect,
+    view: &AppView<'_>,
+    proc: &Process,
+    theme: &Theme,
+) {
+    let parent = view
         .snapshot
         .processes
         .iter()
         .find(|p| p.pid == proc.ppid)
         .map_or_else(|| String::from("—"), |p| p.name.clone());
-
-    let rect = detail_rect(area);
-    frame.render_widget(ratatui::widgets::Clear, rect);
-    let block = ratatui::widgets::Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .title(Line::from(Span::styled(" process", theme.dim())))
-        .border_style(theme.border(true));
-    let inner = block.inner(rect);
-    frame.render_widget(block, rect);
-
-    let spark_h = u16::from(!proc.cpu_spark.is_empty() && inner.height >= 6);
-    let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(spark_h),
-        Constraint::Fill(1),
-        Constraint::Length(1),
-    ])
-    .split(inner);
-
-    let mut head = vec![Span::styled(proc.name.clone(), big_style(theme))];
-    push_token(&mut head, format!("@{}", proc.user), theme.dim());
-    frame.render_widget(Paragraph::new(Line::from(head)), rows[0]);
-
-    if let Some(command) = &proc.command {
-        let max = usize::from(inner.width.saturating_sub(1)).max(8);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                elide_middle(command, max),
-                theme.fg(),
-            ))),
-            rows[1],
-        );
-    }
-
-    if spark_h > 0 && rows.len() > 2 {
-        render_cpu_spark(frame, rows[2], &proc.cpu_spark, theme);
-    }
-
-    let gpu = if proc.gpu > 0.0 {
-        format!("{:.1}", proc.gpu)
-    } else {
-        String::from("unmeasured")
-    };
-    let state = if proc.status.is_empty() {
+    let status = if proc.status.is_empty() {
         String::from("—")
     } else {
         proc.status.to_owned()
     };
-    let mut facts = Vec::new();
+    let inner = cell(frame, area, "identity", theme);
+    let mut spans = Vec::new();
+    push_token(&mut spans, proc.name.clone(), big_style(theme));
+    push_token(&mut spans, format!("@{}", proc.user), theme.dim());
+    push_kv(&mut spans, theme, "state", status, theme.title());
     push_kv(
-        &mut facts,
+        &mut spans,
+        theme,
+        "up",
+        started_ago(proc.start_unix, now_unix()),
+        theme.fg(),
+    );
+    push_kv(
+        &mut spans,
+        theme,
+        "pid",
+        format!("{:>7}", proc.pid),
+        theme.fg(),
+    );
+    push_kv(&mut spans, theme, "ppid", parent, theme.dim());
+    frame.render_widget(
+        Paragraph::new(wrap_spans(spans, usize::from(inner.width.max(1)))),
+        inner,
+    );
+}
+
+fn paint_live(frame: &mut Frame, area: Rect, proc: &Process, theme: &Theme) {
+    let gpu = if proc.gpu > 0.0 {
+        format!("{:.1}", proc.gpu)
+    } else {
+        String::from("—")
+    };
+    let inner = cell(frame, area, "live", theme);
+    let mut spans = Vec::new();
+    push_kv(
+        &mut spans,
         theme,
         "cpu",
-        format!("{:.1}%", proc.cpu),
+        format!("{:>5.1}%", proc.cpu),
         theme.cpu(),
     );
     push_kv(
-        &mut facts,
+        &mut spans,
         theme,
         "mem",
-        bytes_short(proc.mem_bytes),
+        format!("{:>7}", bytes_short(proc.mem_bytes)),
         theme.fg(),
     );
     push_kv(
-        &mut facts,
+        &mut spans,
         theme,
         "threads",
-        proc.threads.to_string(),
+        format!("{:>4}", proc.threads),
         theme.fg(),
     );
-    push_kv(&mut facts, theme, "gpu", gpu, theme.dim());
-    push_kv(&mut facts, theme, "state", state, theme.title());
+    push_kv(&mut spans, theme, "gpu", gpu, theme.dim());
+    frame.render_widget(
+        Paragraph::new(wrap_spans(spans, usize::from(inner.width.max(1)))),
+        inner,
+    );
+    if inner.height >= 2 {
+        let bar = Rect {
+            x: inner.x,
+            y: inner.y.saturating_add(inner.height.saturating_sub(1)),
+            width: inner.width,
+            height: 1,
+        };
+        crate::chrome::render_fill_bar(frame, bar, (proc.cpu / 100.0).clamp(0.0, 1.0), theme.cpu);
+    }
+}
+
+fn paint_command(frame: &mut Frame, area: Rect, proc: &Process, theme: &Theme) {
+    let inner = cell(frame, area, "command", theme);
+    let text = proc.command.as_deref().unwrap_or("—");
+    let max = usize::from(inner.width.max(1));
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            elide_middle(text, max),
+            theme.fg(),
+        ))),
+        inner,
+    );
+}
+
+fn paint_family(frame: &mut Frame, area: Rect, view: &AppView<'_>, proc: &Process, theme: &Theme) {
+    let children: Vec<&Process> = view
+        .snapshot
+        .processes
+        .iter()
+        .filter(|p| p.ppid == proc.pid)
+        .collect();
+    let inner = cell(frame, area, "family", theme);
+    let kids: String = if children.is_empty() {
+        String::from("—")
+    } else {
+        children
+            .iter()
+            .take(4)
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>()
+            .join("  ")
+    };
+    let mut spans = Vec::new();
     push_kv(
-        &mut facts,
+        &mut spans,
         theme,
-        "up",
-        started_ago(proc.start_unix, now),
+        "children",
+        format!("{:>3}", children.len()),
         theme.fg(),
     );
-    push_kv(&mut facts, theme, "pid", proc.pid.to_string(), theme.fg());
-    push_kv(&mut facts, theme, "ppid", parent, theme.dim());
-    let facts_row = rows[3];
-    let wrapped = wrap_spans(facts, usize::from(facts_row.width.max(1)));
-    frame.render_widget(Paragraph::new(wrapped), facts_row);
-    render_action_footer(frame, rows[4], theme);
+    if !children.is_empty() {
+        push_token(&mut spans, kids, theme.dim());
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
 }
 
 fn render_cpu_spark(frame: &mut Frame, area: Rect, samples: &[f32], theme: &Theme) {
@@ -283,12 +410,7 @@ fn render_cpu_spark(frame: &mut Frame, area: Rect, samples: &[f32], theme: &Them
 
 fn render_action_footer(frame: &mut Frame, footer: Rect, theme: &Theme) {
     let mut spans = Vec::new();
-    for (key, verb) in [
-        ("t", "term"),
-        ("k", "kill"),
-        ("i", "interrupt"),
-        ("esc", "close"),
-    ] {
+    for (key, verb, _) in ACTION_CHIPS {
         spans.push(Span::raw("   "));
         spans.push(Span::styled(key.to_owned(), theme.title()));
         spans.push(Span::styled(format!(" {verb}"), theme.dim()));
@@ -691,8 +813,26 @@ mod tests {
         assert!(text.contains("Xcode"), "{text}");
         assert!(text.contains("@cloaky"), "{text}");
         assert!(text.contains("running"), "{text}");
+        assert!(text.contains("identity"), "{text}");
+        assert!(text.contains("live"), "{text}");
+        assert!(text.contains("command"), "{text}");
         assert!(text.contains("term"), "{text}");
         assert!(text.contains("interrupt"), "{text}");
         assert!(!text.contains("%%"), "{text}");
+    }
+
+    #[test]
+    fn dossier_fills_most_of_the_pane() {
+        let rect = detail_rect(ratatui::layout::Rect::new(0, 0, 80, 24));
+        assert!(rect.height >= 16, "height {}", rect.height);
+        assert!(rect.width >= 70, "width {}", rect.width);
+        assert_eq!(rect.x, 1);
+        assert_eq!(rect.y, 1);
+    }
+
+    #[test]
+    fn sort_header_marks_the_active_column() {
+        assert_eq!(sort_header("cpu%", true), "cpu%↓");
+        assert_eq!(sort_header("cpu%", false), "cpu%");
     }
 }

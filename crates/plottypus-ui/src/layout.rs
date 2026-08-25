@@ -207,6 +207,7 @@ pub enum Hit {
     Expand(Panel),
     ExpandClose,
     Search,
+    ProcSort,
     ProcRow(usize),
     Split,
     Help,
@@ -481,6 +482,9 @@ pub fn hit_test(
         }
         if row == proc.y.saturating_add(1) {
             return Some(Hit::Search);
+        }
+        if row == proc.y.saturating_add(2) {
+            return Some(Hit::ProcSort);
         }
         if row > proc.y.saturating_add(2) && row < proc.y.saturating_add(proc.height) {
             let idx = usize::from(row.saturating_sub(proc.y.saturating_add(3)));

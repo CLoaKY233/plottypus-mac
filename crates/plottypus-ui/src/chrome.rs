@@ -40,6 +40,17 @@ pub fn panel_block<'a>(
     block.title(Line::from(Span::styled(mark, theme.title())).right_aligned())
 }
 
+/// Titled rounded cell used by expanded grids and the process dossier.
+pub fn cell(frame: &mut Frame, area: Rect, title: &str, theme: &Theme) -> Rect {
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(Line::from(Span::styled(format!(" {title}"), theme.dim())))
+        .border_style(theme.border(false));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    inner
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Graph<'a> {
     pub history: &'a History,

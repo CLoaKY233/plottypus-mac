@@ -507,6 +507,10 @@ impl App {
                 self.searching = true;
                 self.focus = Focus::Search;
             }
+            Some(Hit::ProcSort) => {
+                self.config.proc_sort = self.config.proc_sort.next();
+                self.touch();
+            }
             Some(Hit::ProcRow(idx)) => {
                 self.searching = false;
                 self.focus = Focus::Processes;

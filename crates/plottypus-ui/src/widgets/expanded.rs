@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
 use crate::chrome::{
-    Axis, Graph, GraphInk, push_kv, push_token, render_fill_bar, render_scaled_graph,
+    Axis, Graph, GraphInk, cell, push_kv, push_token, render_fill_bar, render_scaled_graph,
 };
 use crate::layout::Panel;
 use crate::theme::Theme;
@@ -25,16 +25,6 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme, 
         Panel::Fans => sensors(frame, area, view, theme),
         Panel::Processes => super::processes::render(frame, area, view, theme),
     }
-}
-
-fn cell(frame: &mut Frame, area: Rect, title: &str, theme: &Theme) -> Rect {
-    let block = ratatui::widgets::Block::bordered()
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .title(Line::from(Span::styled(format!(" {title}"), theme.dim())))
-        .border_style(theme.border(false));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    inner
 }
 
 fn rows_of(area: Rect, weights: &[u16]) -> Vec<Rect> {
