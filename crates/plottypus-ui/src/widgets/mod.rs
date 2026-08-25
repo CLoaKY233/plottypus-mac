@@ -85,6 +85,8 @@ pub struct AppView<'a> {
     pub help: bool,
     pub settings: bool,
     pub confirm_kill: bool,
+    pub confirm_pid: Option<u32>,
+    pub confirm_signal: &'static str,
     pub searching: bool,
     pub ready: bool,
     pub frozen: bool,
@@ -139,6 +141,7 @@ impl AppView<'_> {
 }
 
 pub use processes::filtered as filtered_processes;
+pub use processes::{DetailAction, detail_actions, detail_rect};
 
 pub fn render_app(frame: &mut Frame, view: &AppView<'_>) {
     let theme = Theme::default();
@@ -285,6 +288,9 @@ pub(crate) mod tests_support {
         pub help: bool,
         pub settings: bool,
         pub confirm_kill: bool,
+        pub confirm_pid: Option<u32>,
+        pub confirm_signal: &'static str,
+        pub detail_pid: Option<u32>,
         pub searching: bool,
         pub ready: bool,
         pub frozen: bool,
@@ -300,6 +306,11 @@ pub(crate) mod tests_support {
             mem_bytes: 0,
             threads: 1,
             gpu: 0.0,
+            user: String::from("cloaky"),
+            command: None,
+            status: "sleeping",
+            start_unix: 0,
+            cpu_spark: Vec::new(),
         }
     }
 
@@ -334,6 +345,9 @@ pub(crate) mod tests_support {
             help: false,
             settings: false,
             confirm_kill: false,
+            confirm_pid: None,
+            confirm_signal: "TERM",
+            detail_pid: None,
             searching: false,
             ready: true,
             frozen: false,
@@ -363,6 +377,8 @@ pub(crate) mod tests_support {
                 help: self.help,
                 settings: self.settings,
                 confirm_kill: self.confirm_kill,
+                confirm_pid: self.confirm_pid,
+                confirm_signal: self.confirm_signal,
                 searching: self.searching,
                 ready: self.ready,
                 frozen: self.frozen,
@@ -373,7 +389,7 @@ pub(crate) mod tests_support {
                 show_cores: true,
                 show_threads: false,
                 sort: plottypus_core::ProcSort::Cpu,
-                detail_pid: None,
+                detail_pid: self.detail_pid,
                 expanded: self.expanded,
                 proc_ratio: 55,
                 interval_ms: 1000,
@@ -627,6 +643,31 @@ mod render_tests {
     }
 
     #[test]
+    fn detail_popup_shows_identity_and_actions() {
+        let mut fx = fixture("");
+        fx.proc.selected_pid = Some(904);
+        fx.snap.processes = vec![crate::widgets::tests_support::process(904, "claude", 12.5)];
+        fx.snap.processes[0].command = Some(String::from("/Users/u/.local/bin/claude"));
+        fx.snap.processes[0].start_unix = 1_700_000_000;
+        fx.expanded = None;
+        let mut view = fx.view();
+        view.detail_pid = Some(904);
+        let text = paint(&view, 100, 30);
+        for want in [
+            "process",
+            "@cloaky",
+            "/Users/u/.local/bin/claude",
+            "sleeping",
+            "term",
+            "kill",
+            "interrupt",
+            "esc close",
+        ] {
+            assert!(text.contains(want), "missing {want}: {text}");
+        }
+    }
+
+    #[test]
     fn help_overlay_lists_keys() {
         let mut fx = fixture("");
         fx.help = true;
@@ -692,6 +733,24 @@ mod visual_dump {
             out.push('\n');
         }
         out
+    }
+
+    #[test]
+    #[ignore = "visual tool: run with --ignored --nocapture"]
+    fn dump_detail_popup() {
+        use crate::widgets::tests_support::process;
+        let mut fx = fixture("");
+        fx.ready = true;
+        fx.snap.processes = vec![process(904, "claude", 12.5)];
+        fx.snap.processes[0].user = String::from("cloaky");
+        fx.snap.processes[0].command = Some(String::from(
+            "/Users/cloaky/.local/share/claude/versions/2.1.241/bin/claude",
+        ));
+        fx.snap.processes[0].start_unix = 1_755_000_000;
+        fx.snap.processes[0].mem_bytes = 544 * 1024 * 1024;
+        let mut view = fx.view();
+        view.detail_pid = Some(904);
+        println!("{}", paint(&view, 100, 30));
     }
 
     #[test]

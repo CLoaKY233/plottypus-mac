@@ -221,6 +221,6 @@ impl Degrade {
 - [x] Glyph/typography system documented; font recommendations for users
 - [x] Clean, comment-light samples; zero unsafe in the UI crate
 - [x] btop/macmon deltas stated above
-- [ ] Remaining build work lives in [ROADMAP.md](../ROADMAP.md): process-loop actions &
-      enrichment, DEC 2026 synchronized updates, battery (IOPS), and the IOReport residency
-      project that unlocks real `scaled`, frequencies, PSTR watts and throttle marks.
+- [ ] Remaining build work lives in [ROADMAP.md](../ROADMAP.md): process tree view,
+      battery (IOPS), and the IOReport residency project that unlocks real `scaled`,
+      frequencies, PSTR watts and throttle marks.

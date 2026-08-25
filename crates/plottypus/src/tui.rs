@@ -4,7 +4,8 @@ use std::sync::Once;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode,
 };
 use plottypus_core::{Error, Result};
 use ratatui::Terminal;
@@ -57,4 +58,12 @@ fn restore_inner() -> Result<()> {
 pub fn restore_best_effort() {
     let _ = restore();
     let _ = io::Write::flush(&mut stdout());
+}
+
+pub fn sync_begin() {
+    let _ = execute!(stdout(), BeginSynchronizedUpdate);
+}
+
+pub fn sync_end() {
+    let _ = execute!(stdout(), EndSynchronizedUpdate);
 }

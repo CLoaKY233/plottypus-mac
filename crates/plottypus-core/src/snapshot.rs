@@ -359,7 +359,7 @@ pub fn role_for_core(
     linear_core_role(e_cores, p_cores, s_cores, mach_index, total)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Process {
     pub pid: u32,
     pub ppid: u32,
@@ -369,6 +369,12 @@ pub struct Process {
     pub threads: u32,
     /// Share of GPU if known; 0 means unmeasured (macOS has no cheap per-pid GPU %).
     pub gpu: f32,
+    pub user: String,
+    pub command: Option<String>,
+    pub status: &'static str,
+    pub start_unix: i64,
+    /// Recent per-pid CPU % samples (0..=100), oldest first.
+    pub cpu_spark: Vec<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

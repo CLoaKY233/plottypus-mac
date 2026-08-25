@@ -6,9 +6,11 @@ use plottypus_core::{
 };
 use plottypus_metrics::{Signal, send_signal};
 use plottypus_ui::{
-    AppView, Focus, Hit, LayoutFlags, Panel, ProcView, filtered_processes, hit_test, render_app,
+    AppView, DetailAction, Focus, Hit, LayoutFlags, Panel, ProcView, detail_actions, detail_rect,
+    filtered_processes, hit_test, render_app,
 };
 use ratatui::Frame;
+use ratatui::layout::Rect;
 
 use crate::event::{self, Event};
 use crate::tui::{self, AppTerminal};
@@ -39,11 +41,20 @@ fn run_inner(terminal: &mut AppTerminal) -> (Result<()>, Option<String>) {
         Err(err) => return (Err(err), None),
     };
     loop {
-        if let Err(err) = terminal.draw(|frame| app.draw(frame)) {
+        tui::sync_begin();
+        let draw_result = terminal.draw(|frame| app.draw(frame));
+        tui::sync_end();
+        if let Err(err) = draw_result {
             return (Err(plottypus_core::Error::terminal(err.to_string())), None);
         }
         let timeout = app.poll_timeout();
-        match event::poll(timeout, app.searching, app.settings, app.expanded.is_some()) {
+        let modes = event::Modes {
+            searching: app.searching,
+            settings: app.settings,
+            expanded: app.expanded.is_some(),
+            detail: app.detail_pid.is_some(),
+        };
+        match event::poll(timeout, modes) {
             Ok(Some(Event::Quit)) => break,
             Ok(Some(ev)) => {
                 if !matches!(ev, Event::Tick) {
@@ -88,6 +99,7 @@ struct App {
     last_tick: Instant,
     status: Option<(String, Instant)>,
     dirty_prefs: bool,
+    pending_signal: Signal,
     last_area: ratatui::layout::Rect,
     proc_ratio: u16,
     dragging_split: bool,
@@ -128,6 +140,7 @@ impl App {
             last_tick: Instant::now(),
             status: None,
             dirty_prefs: false,
+            pending_signal: Signal::Term,
             last_area: ratatui::layout::Rect::new(0, 0, 80, 24),
             proc_ratio,
             dragging_split: false,
@@ -216,6 +229,11 @@ impl App {
         self.last_tick = Instant::now();
         self.proc.selected_pid = keep_pid;
         self.sync_selection();
+        if let Some(pid) = self.detail_pid
+            && !self.snapshot.processes.iter().any(|p| p.pid == pid)
+        {
+            self.detail_pid = None;
+        }
     }
 
     fn handle(&mut self, event: Event) {
@@ -292,6 +310,17 @@ impl App {
             Event::Move(delta) => self.handle_move(delta),
             Event::Kill => {
                 if self.can_kill() {
+                    self.pending_signal = Signal::Term;
+                    self.arm_kill();
+                }
+            }
+            Event::DetailTerm | Event::DetailKill | Event::DetailInterrupt => {
+                if self.detail_pid.is_some() {
+                    self.pending_signal = match event {
+                        Event::DetailTerm => Signal::Term,
+                        Event::DetailKill => Signal::Kill,
+                        _ => Signal::Int,
+                    };
                     self.arm_kill();
                 }
             }
@@ -337,6 +366,13 @@ impl App {
             Event::MouseUp => self.dragging_split = false,
             _ => {}
         }
+    }
+
+    fn point_in(rect: Rect, col: u16, row: u16) -> bool {
+        col >= rect.x
+            && col < rect.x.saturating_add(rect.width)
+            && row >= rect.y
+            && row < rect.y.saturating_add(rect.height)
     }
 
     fn drag_split(&mut self, col: u16) {
@@ -404,11 +440,35 @@ impl App {
     }
 
     fn open_detail(&mut self) {
-        self.detail_pid = self.selected_pid();
+        if let Some(pid) = self.selected_pid() {
+            self.detail_pid = Some(pid);
+            self.proc.selected_pid = Some(pid);
+        }
     }
 
     fn on_click(&mut self, col: u16, row: u16) {
         let flags = self.layout_flags();
+        if self.detail_pid.is_some()
+            && let Some(proc_area) =
+                plottypus_ui::inner_process_area(self.last_area, self.effective_surface(), flags)
+        {
+            for (rect, action) in detail_actions(proc_area) {
+                if Self::point_in(rect, col, row) {
+                    match action {
+                        DetailAction::Term => self.handle(Event::DetailTerm),
+                        DetailAction::Kill => self.handle(Event::DetailKill),
+                        DetailAction::Interrupt => self.handle(Event::DetailInterrupt),
+                        DetailAction::Close => self.handle(Event::FilterCancel),
+                    }
+                    return;
+                }
+            }
+            let rect = detail_rect(proc_area);
+            if Self::point_in(rect, col, row) {
+                return;
+            }
+            self.detail_pid = None;
+        }
         match hit_test(self.last_area, self.effective_surface(), flags, col, row) {
             Some(Hit::Search) => {
                 self.searching = true;
@@ -494,7 +554,11 @@ impl App {
     }
 
     fn arm_kill(&mut self) {
-        self.confirm_pid = self.selected_pid();
+        self.confirm_pid = if self.detail_pid.is_some() {
+            self.detail_pid
+        } else {
+            self.selected_pid()
+        };
         self.confirm_kill = self.confirm_pid.is_some();
         if !self.confirm_kill {
             self.set_status(String::from("no process selected"));
@@ -523,8 +587,9 @@ impl App {
         match event {
             Event::ConfirmYes => {
                 if let Some(pid) = self.confirm_pid.take() {
-                    match send_signal(pid, Signal::Term) {
-                        Ok(()) => self.set_status(format!("sent TERM to {pid}")),
+                    let signal = self.pending_signal;
+                    match send_signal(pid, signal) {
+                        Ok(()) => self.set_status(format!("sent {} to {pid}", signal.label())),
                         Err(err) => self.set_status(err.to_string()),
                     }
                 }
@@ -564,6 +629,9 @@ impl App {
             (i32::try_from(cur).unwrap_or(0) + delta).clamp(0, (rows.len() - 1) as i32) as usize;
         self.proc.selected = next;
         self.proc.selected_pid = rows.get(next).map(|p| p.pid);
+        if self.detail_pid.is_some() {
+            self.detail_pid = self.proc.selected_pid;
+        }
     }
 
     fn sync_selection(&mut self) {
@@ -613,6 +681,8 @@ impl App {
             help: self.help,
             settings: self.settings,
             confirm_kill: self.confirm_kill,
+            confirm_pid: self.confirm_pid,
+            confirm_signal: self.pending_signal.label(),
             searching: self.searching,
             ready: self.ready,
             frozen: self.frozen,
@@ -677,20 +747,17 @@ mod tests {
     #[test]
     fn tick_stores_raw_history_values() {
         let mut app = App::new().unwrap();
-        app.tick();
-        assert_eq!(app.cpu_history.last(), Some(app.snapshot.cpu.active));
-        assert_eq!(
-            app.net_rx_history.last(),
-            Some(app.snapshot.network.rx_bps as f32)
-        );
-        assert_eq!(
-            app.net_tx_history.last(),
-            Some(app.snapshot.network.tx_bps as f32)
-        );
-        assert_eq!(
-            app.disk_history.last(),
-            Some(app.snapshot.disk.used_ratio())
-        );
+        let mut snap = app.snapshot.clone();
+        snap.cpu.active = 0.42;
+        snap.cpu.scaled = 0.42;
+        snap.network.rx_bps = 1_250;
+        snap.network.tx_bps = 800;
+        snap.memory.used_bytes = 8;
+        snap.memory.total_bytes = 16;
+        app.apply_snapshot(snap);
+        assert_eq!(app.cpu_history.last(), Some(0.42));
+        assert_eq!(app.net_rx_history.last(), Some(1_250.0));
+        assert_eq!(app.net_tx_history.last(), Some(800.0));
         let mem = if app.snapshot.memory.total_bytes == 0 {
             0.0
         } else {
@@ -711,6 +778,11 @@ mod tests {
                 mem_bytes: 1,
                 threads: 1,
                 gpu: 0.0,
+                user: String::from("cloaky"),
+                command: None,
+                status: "sleeping",
+                start_unix: 0,
+                cpu_spark: Vec::new(),
             },
             plottypus_core::Process {
                 pid: 2,
@@ -720,6 +792,11 @@ mod tests {
                 mem_bytes: 1,
                 threads: 1,
                 gpu: 0.0,
+                user: String::from("cloaky"),
+                command: None,
+                status: "sleeping",
+                start_unix: 0,
+                cpu_spark: Vec::new(),
             },
         ];
         app.proc.selected_pid = Some(1);
@@ -761,6 +838,11 @@ mod tests {
             mem_bytes: 1,
             threads: 1,
             gpu: 0.0,
+            user: String::from("cloaky"),
+            command: None,
+            status: "sleeping",
+            start_unix: 0,
+            cpu_spark: Vec::new(),
         }];
         app.focus = Focus::Processes;
         app.last_area = ratatui::layout::Rect::new(0, 0, 120, 30);
@@ -820,5 +902,61 @@ mod tests {
             Some(focused),
             "wheel must not switch the expanded panel"
         );
+    }
+
+    #[test]
+    fn kill_from_detail_targets_the_detailed_pid() {
+        let mut app = App::new().unwrap();
+        let mk = |pid: u32, name: &str, cpu: f32| plottypus_core::Process {
+            pid,
+            ppid: 1,
+            name: name.to_owned(),
+            cpu,
+            mem_bytes: 1,
+            threads: 1,
+            gpu: 0.0,
+            user: String::from("u"),
+            command: None,
+            status: "sleeping",
+            start_unix: 0,
+            cpu_spark: Vec::new(),
+        };
+        app.snapshot.processes = vec![mk(11, "target", 1.0), mk(22, "other", 9.0)];
+        app.detail_pid = Some(11);
+        app.handle(Event::DetailKill);
+        assert!(app.confirm_kill);
+        assert_eq!(
+            app.confirm_pid,
+            Some(11),
+            "kill must target the detailed pid"
+        );
+        app.handle(Event::ConfirmNo);
+        assert!(!app.confirm_kill);
+    }
+
+    #[test]
+    fn open_detail_pins_selection() {
+        let mut app = App::new().unwrap();
+        let mk = |pid: u32, cpu: f32| plottypus_core::Process {
+            pid,
+            ppid: 1,
+            name: format!("p{pid}"),
+            cpu,
+            mem_bytes: 1,
+            threads: 1,
+            gpu: 0.0,
+            user: String::from("u"),
+            command: None,
+            status: "sleeping",
+            start_unix: 0,
+            cpu_spark: Vec::new(),
+        };
+        app.snapshot.processes = vec![mk(11, 1.0), mk(22, 9.0)];
+        app.proc.selected_pid = Some(11);
+        app.handle(Event::Expand);
+        assert_eq!(app.detail_pid, Some(11));
+        assert_eq!(app.proc.selected_pid, Some(11));
+        app.handle(Event::Move(1));
+        assert_eq!(app.detail_pid, app.proc.selected_pid);
     }
 }

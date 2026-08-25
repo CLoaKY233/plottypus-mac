@@ -38,14 +38,12 @@ Found in hands-on review against the running binary; each has a regression test 
 
 ## Phase 2 — Process pass (finish the job)
 
-- [ ] Detail popup actions: TERM / KILL / INT clickable inside the popup (`Signal` already exists;
-   UI only ever sends TERM).
-- [ ] Pin `selected_pid == detail_pid`: arming a kill while the popup shows pid A must target A.
-- [ ] Detail enrichment from data we already touch: user (`kinfo_proc` uid), full command path,
-   state, started-ago.
-- [ ] Per-pid CPU sparkline (collector cache already keeps per-pid deltas).
+- [x] Detail popup actions: TERM / KILL / INT clickable inside the popup.
+- [x] Pin `selected_pid == detail_pid`: arming a kill while the popup shows pid A targets A.
+- [x] Detail enrichment: user, full command path, state, started-ago.
+- [x] Per-pid CPU sparkline from the collector's cached deltas.
 - [ ] Tree view from `ppid`.
-- [ ] Search matches pids too; highlight matches.
+- [x] Search matches pids too; highlight matches.
 
 ## Phase 3 — Layout pass
 
@@ -62,7 +60,7 @@ Found in hands-on review against the running binary; each has a regression test 
 ## Phase 4 — Feel pass
 
 - [x] Worker-thread sampler: FFI never blocks draw/poll (mpsc command/snapshot channels).
-- [ ] DEC 2026 synchronized updates to kill frame flicker.
+- [x] DEC 2026 synchronized updates to kill frame flicker.
 - [x] Persist settings after first change (interval, pane toggles, sort, surface, proc ratio);
       zero config on first run preserved.
 - [ ] Battery + power source (IOPS APIs) — core persona works on a laptop.

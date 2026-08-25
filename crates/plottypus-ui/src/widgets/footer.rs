@@ -14,9 +14,14 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
 
 fn footer_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     if view.confirm_kill {
-        let who = view.proc.selected_pid.map_or_else(
-            || String::from(" kill?  "),
-            |pid| format!(" kill pid {pid}?  "),
+        let signal = if view.confirm_signal.is_empty() {
+            "TERM"
+        } else {
+            view.confirm_signal
+        };
+        let who = view.confirm_pid.map_or_else(
+            || format!(" {signal}?  "),
+            |pid| format!(" {signal} pid {pid}?  "),
         );
         return Line::from(vec![
             Span::styled(who, theme.title()),
@@ -31,7 +36,12 @@ fn footer_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     }
 
     let mut spans = vec![];
-    if view.expanded.is_some() {
+    if view.detail_pid.is_some() {
+        key(&mut spans, theme, "t", "term");
+        key(&mut spans, theme, "k", "kill");
+        key(&mut spans, theme, "i", "interrupt");
+        key(&mut spans, theme, "esc", "close");
+    } else if view.expanded.is_some() {
         key(&mut spans, theme, "esc", "home");
     } else {
         key(&mut spans, theme, "?", "help");
@@ -120,9 +130,24 @@ mod tests {
     fn confirm_shows_pid() {
         let mut fx = fixture("");
         fx.confirm_kill = true;
-        fx.proc.selected_pid = Some(904);
+        fx.confirm_pid = Some(904);
+        fx.confirm_signal = "KILL";
+        fx.proc.selected_pid = Some(1);
         let t = text(&fx.view());
-        assert!(t.contains("904"));
+        assert!(t.contains("904"), "{t}");
+        assert!(t.contains("KILL"), "{t}");
+        assert!(!t.contains("TERM pid 1"), "{t}");
         assert!(t.contains("yes"));
+    }
+
+    #[test]
+    fn detail_footer_lists_signals() {
+        let mut fx = fixture("");
+        fx.detail_pid = Some(904);
+        let t = text(&fx.view());
+        assert!(t.contains("term"), "{t}");
+        assert!(t.contains("kill"), "{t}");
+        assert!(t.contains("interrupt"), "{t}");
+        assert!(t.contains("close"), "{t}");
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use plottypus_core::{Process, Result};
@@ -10,14 +10,30 @@ pub enum Signal {
     Int,
 }
 
+impl Signal {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Term => "TERM",
+            Self::Kill => "KILL",
+            Self::Int => "INT",
+        }
+    }
+}
+
+const SPARK_LEN: usize = 32;
+
 struct CachedProc {
     name: String,
+    command: Option<String>,
     cpu_ns: u64,
     start_sec: i64,
+    spark: VecDeque<f32>,
 }
 
 pub(crate) struct ProcessCollector {
     cache: HashMap<u32, CachedProc>,
+    names: HashMap<u32, String>,
     last: Option<Instant>,
     ncpu: u32,
 }
@@ -26,9 +42,19 @@ impl ProcessCollector {
     pub(crate) fn new() -> Self {
         Self {
             cache: HashMap::new(),
+            names: HashMap::new(),
             last: None,
             ncpu: logical_cpus(),
         }
+    }
+
+    fn user_name(&mut self, uid: u32) -> String {
+        if let Some(name) = self.names.get(&uid) {
+            return name.clone();
+        }
+        let name = lookup_uid(uid);
+        self.names.insert(uid, name.clone());
+        name
     }
 
     pub(crate) fn sample(&mut self) -> Result<Vec<Process>> {
@@ -40,6 +66,17 @@ impl ProcessCollector {
         {
             Ok(Vec::new())
         }
+    }
+}
+
+fn lookup_uid(uid: u32) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        macos::lookup_uid(uid)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        uid.to_string()
     }
 }
 
@@ -92,9 +129,11 @@ pub(crate) fn libc_signal(signal: Signal) -> libc::c_int {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::{CachedProc, ProcessCollector, Signal, basename, cpu_percent, libc_signal};
+    use super::{
+        CachedProc, ProcessCollector, SPARK_LEN, Signal, basename, cpu_percent, libc_signal,
+    };
     use plottypus_core::{Error, Process, Result};
-    use std::collections::HashSet;
+    use std::collections::{HashSet, VecDeque};
     use std::ffi::CStr;
     use std::mem::{MaybeUninit, size_of};
     use std::time::Instant;
@@ -138,36 +177,69 @@ mod macos {
         interval_ns: u128,
         ncpu: u32,
     ) -> Process {
-        let cached = collector.cache.get(&info.pid);
-        let name = match cached {
-            Some(c) if c.start_sec == info.start_sec && !c.name.is_empty() => c.name.clone(),
-            _ => resolve_name(info.pid, &info.comm),
+        let bsd = bsd_info(info.pid);
+        let (uid, status, bsd_start) = match &bsd {
+            Some(bsd) => (
+                bsd.pbi_uid,
+                status_word(bsd.pbi_status),
+                i64::try_from(bsd.pbi_start_tvsec).unwrap_or(0),
+            ),
+            None => (0, "", 0),
         };
+        let start_unix = if bsd_start > 0 {
+            bsd_start
+        } else {
+            info.start_sec
+        };
+
+        let prev = collector.cache.remove(&info.pid);
+        let same_run = prev.as_ref().is_some_and(|c| c.start_sec == info.start_sec);
+        let (name, command) = if same_run {
+            prev.as_ref().filter(|c| !c.name.is_empty()).map_or_else(
+                || resolve_identity(info.pid, &info.comm),
+                |c| (c.name.clone(), c.command.clone()),
+            )
+        } else {
+            resolve_identity(info.pid, &info.comm)
+        };
+        let user = collector.user_name(uid);
 
         let task = task_info(info.pid);
         let (cpu, cpu_ns, mem_bytes, threads) = match task {
             Some(task) => {
                 let cpu_ticks = task.pti_total_user.saturating_add(task.pti_total_system);
                 let cpu_ns = crate::sys::mach_ticks_to_ns(cpu_ticks);
-                let prev_ns = cached
-                    .filter(|c| c.start_sec == info.start_sec)
-                    .map(|c| c.cpu_ns);
-                let cpu = prev_ns.map_or(0.0, |prev| {
-                    cpu_percent(cpu_ns.saturating_sub(prev), interval_ns, ncpu)
+                let prev_ns = prev.as_ref().filter(|_| same_run).map(|c| c.cpu_ns);
+                let cpu = prev_ns.map_or(0.0, |prev_ns| {
+                    cpu_percent(cpu_ns.saturating_sub(prev_ns), interval_ns, ncpu)
                 });
                 let mem_bytes = task.pti_resident_size;
                 let threads = u32::try_from(task.pti_threadnum.max(0)).unwrap_or(0);
                 (cpu, cpu_ns, mem_bytes, threads)
             }
-            None => (0.0, cached.map_or(0, |c| c.cpu_ns), 0, 0),
+            None => (0.0, prev.as_ref().map_or(0, |c| c.cpu_ns), 0, 0),
         };
+
+        let mut spark = if same_run {
+            prev.map_or_else(VecDeque::new, |c| c.spark)
+        } else {
+            VecDeque::new()
+        };
+        if same_run {
+            spark.push_back(cpu);
+            while spark.len() > SPARK_LEN {
+                spark.pop_front();
+            }
+        }
 
         collector.cache.insert(
             info.pid,
             CachedProc {
                 name: name.clone(),
+                command: command.clone(),
                 cpu_ns,
                 start_sec: info.start_sec,
+                spark: spark.clone(),
             },
         );
 
@@ -179,6 +251,11 @@ mod macos {
             mem_bytes,
             threads,
             gpu: 0.0,
+            user,
+            command,
+            status,
+            start_unix,
+            cpu_spark: spark.into_iter().collect(),
         }
     }
 
@@ -278,10 +355,78 @@ mod macos {
         String::from_utf8_lossy(&raw[..end]).into_owned()
     }
 
-    fn resolve_name(pid: u32, comm: &str) -> String {
+    fn resolve_identity(pid: u32, comm: &str) -> (String, Option<String>) {
         let argv0 = pid_argv0(pid);
         let path = pid_path(pid);
-        preferred_name(pid, argv0.as_deref(), path.as_deref(), comm)
+        let command = argv0.clone().or_else(|| path.clone());
+        let name = preferred_name(pid, argv0.as_deref(), path.as_deref(), comm);
+        (name, command)
+    }
+
+    pub(super) fn lookup_uid(uid: u32) -> String {
+        use std::mem::MaybeUninit;
+
+        const BUF_LEN: usize = 2048;
+        let mut pwd = MaybeUninit::<libc::passwd>::uninit();
+        let mut buf = [0_u8; BUF_LEN];
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        let rc = unsafe {
+            // SAFETY: pwd/buf are writable locals; the kernel fills `result`.
+            libc::getpwuid_r(
+                uid,
+                pwd.as_mut_ptr(),
+                buf.as_mut_ptr().cast(),
+                BUF_LEN,
+                &raw mut result,
+            )
+        };
+        if rc == 0 && !result.is_null() {
+            let pwd = unsafe {
+                // SAFETY: getpwuid_r wrote a full passwd on success.
+                pwd.assume_init()
+            };
+            let name = unsafe { CStr::from_ptr(pwd.pw_name).to_string_lossy().into_owned() };
+            if !name.is_empty() {
+                return name;
+            }
+        }
+        uid.to_string()
+    }
+
+    fn bsd_info(pid: u32) -> Option<libc::proc_bsdinfo> {
+        let mut info = MaybeUninit::<libc::proc_bsdinfo>::uninit();
+        let want = size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let n = unsafe {
+            // SAFETY: PROC_PIDTBSDINFO writes a proc_bsdinfo into `info`.
+            libc::proc_pidinfo(
+                pid as libc::c_int,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                want,
+            )
+        };
+        if n != want {
+            return None;
+        }
+        Some(unsafe {
+            // SAFETY: the kernel wrote the full struct.
+            info.assume_init()
+        })
+    }
+
+    fn status_word(status: u32) -> &'static str {
+        const SRUN: u32 = 2;
+        const SSLEEP: u32 = 3;
+        const SSTOP: u32 = 5;
+        const SZOMB: u32 = 6;
+        match status {
+            SRUN => "running",
+            SSLEEP => "sleeping",
+            SSTOP => "stopped",
+            SZOMB => "zombie",
+            _ => "",
+        }
     }
 
     /// `KERN_PROCARGS2` argv[0] — matches what `ps -o comm=` shows.
@@ -506,6 +651,21 @@ mod tests {
         );
         assert!(second.iter().all(|p| p.pid >= 1));
         assert!(second.iter().all(|p| p.cpu.is_finite() && p.cpu >= 0.0));
+
+        let self_proc = second.iter().find(|p| p.pid == self_pid).expect("self");
+        assert!(!self_proc.user.is_empty(), "uid resolved to a name");
+        assert!(
+            ["running", "sleeping", "stopped"].contains(&self_proc.status),
+            "status {}",
+            self_proc.status
+        );
+        let command = self_proc.command.clone().expect("command captured");
+        assert!(command.contains('/'), "full path: {command}");
+        assert!(self_proc.start_unix > 1_500_000_000, "sane start epoch");
+
+        for proc in second.iter().take(50) {
+            assert!(!proc.user.is_empty(), "{} has a user", proc.pid);
+        }
     }
 
     #[cfg(target_os = "macos")]

@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use crate::theme::Theme;
 use crate::widgets::AppView;
 
-const HELP: [&str; 14] = [
+const HELP: [&str; 15] = [
     "tab / shift-tab          move between boxes",
     "enter                    expand focused box",
     "esc                      close expand / help / search",
@@ -16,6 +16,7 @@ const HELP: [&str; 14] = [
     "click ×                  back to home",
     "/                        search processes",
     "enter on a process       process details",
+    "t / k / i                term / kill / interrupt in details",
     "x                        kill selected (then y/n)",
     "s                        settings (sampling, panes, processes)",
     "f                        pause live updates",
