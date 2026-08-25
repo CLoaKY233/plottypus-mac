@@ -33,7 +33,7 @@ Found in hands-on review against the running binary; each has a regression test 
 - [ ] Cluster + core frequency (no sysctl source exists on AS; needs IOReport residency work).
 - [ ] Total SoC watts (IOReport `PSTR`) as the power headline in Glance and Work health band.
 - [x] Graph stain ramp: idle stays dim; load stains accent→gold→red as thermal leaves nominal.
-- [x] Peak pip on the max-in-view column.
+- [x] ~~Peak pip~~ shipped, then removed by product call: unexplainable noise over data.
 - [ ] Throttle marks where frequency slumps while watts flatten (blocked on a freq source).
 
 ## Phase 2 — Process pass (finish the job)
@@ -54,9 +54,9 @@ Found in hands-on review against the running binary; each has a regression test 
 - [x] Terminal owns the background (no painted black); net pane back on first paint.
 - [x] Work rebalance: process column default 55% (clamp 35–72).
 - [ ] Auto-promote net/disk during sustained IO, demote after.
-- [ ] Degradation ladder for shrinking widths beyond the 60-column gate (defined hide order).
+- [x] Degradation ladder for shrinking widths (Full → Tight → Minimal, defined hide order).
 - [x] Quiet contextual footer: base `? / q`; verbs appear per focus/selection only; paused chip.
-- [ ] Slimmer axis gutters; drop ticks that duplicate title numbers.
+- [x] Slimmer axis gutters: percent/celsius tick columns removed entirely; bits keeps its gutter.
 - [ ] Revisit the Work/Glance column gate (~100 cols in PRD vs 60 today) with real small-pane use.
 
 ## Phase 4 — Feel pass
@@ -67,7 +67,7 @@ Found in hands-on review against the running binary; each has a regression test 
       zero config on first run preserved.
 - [ ] Battery + power source (IOPS APIs) — core persona works on a laptop.
 - [x] Status messages expire instead of living in the footer forever.
-- [ ] Adaptive background (stop forcing black), colorblind-safe accent ramp.
+- [x] Adaptive background (terminal decides; no painted bg). Colorblind ramp audit still open.
 - [x] Measure self CPU: ~1% at 1 s on the reference machine (gate <2%).
 
 ## Phase 5 — later
