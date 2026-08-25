@@ -214,6 +214,11 @@ pub enum Hit {
     Settings,
     Kill,
     Quit,
+    ConfirmYes,
+    ConfirmNo,
+    DetailTerm,
+    DetailKill,
+    DetailInterrupt,
 }
 
 /// Keep in sync with `plottypus_core::WORK_MIN_COLS` (24 proc + 36 metrics).

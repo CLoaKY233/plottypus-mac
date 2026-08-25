@@ -143,11 +143,16 @@ pub fn detail_actions(area: Rect) -> Vec<(Rect, DetailAction)> {
     let mut cursor = inner_x;
     for (key, verb, action) in ACTION_CHIPS {
         let w = 3 + key.len() as u16 + 1 + verb.len() as u16;
+        let right = rect.x.saturating_add(rect.width);
+        if cursor >= right {
+            break;
+        }
+        let width = w.min(right.saturating_sub(cursor));
         out.push((
             Rect {
                 x: cursor,
                 y: footer_y,
-                width: w,
+                width,
                 height: 1,
             },
             action,

@@ -477,6 +477,11 @@ impl App {
                         self.expanded = None;
                     }
                 }
+                Some(Hit::DetailTerm) => self.handle(Event::DetailTerm),
+                Some(Hit::DetailKill) => self.handle(Event::DetailKill),
+                Some(Hit::DetailInterrupt) => self.handle(Event::DetailInterrupt),
+                Some(Hit::ConfirmYes) => self.handle(Event::ConfirmYes),
+                Some(Hit::ConfirmNo) => self.handle(Event::ConfirmNo),
                 _ => {}
             }
             return;
@@ -501,6 +506,7 @@ impl App {
                 return;
             }
             self.detail_pid = None;
+            return;
         }
         match hit_test(self.last_area, self.effective_surface(), flags, col, row) {
             Some(Hit::Search) => {
@@ -538,7 +544,15 @@ impl App {
                     self.arm_kill();
                 }
             }
-            Some(Hit::Quit) | None => {}
+            Some(
+                Hit::Quit
+                | Hit::ConfirmYes
+                | Hit::ConfirmNo
+                | Hit::DetailTerm
+                | Hit::DetailKill
+                | Hit::DetailInterrupt,
+            )
+            | None => {}
         }
     }
 

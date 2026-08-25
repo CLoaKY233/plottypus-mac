@@ -14,27 +14,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
 
 fn footer_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     if view.confirm_kill {
-        let signal = if view.confirm_signal.is_empty() {
-            "TERM"
-        } else {
-            view.confirm_signal
-        };
-        let who = view.confirm_pid.map_or_else(
-            || format!(" {signal}?  "),
-            |pid| {
-                let name = view
-                    .snapshot
-                    .processes
-                    .iter()
-                    .find(|p| p.pid == pid)
-                    .map(|p| p.name.as_str())
-                    .filter(|n| !n.is_empty());
-                match name {
-                    Some(name) => format!(" {signal} {name} ({pid})?  "),
-                    None => format!(" {signal} pid {pid}?  "),
-                }
-            },
-        );
+        let who = confirm_who(view);
         return Line::from(vec![
             Span::styled(who, theme.title()),
             Span::styled("y", theme.title()),
@@ -96,7 +76,7 @@ pub fn footer_hit(
         return None;
     }
     if view.confirm_kill {
-        return None;
+        return confirm_hit(view, area, col);
     }
     let mut x = area.x;
     for (k, verb, hit) in footer_chips(view) {
@@ -109,10 +89,51 @@ pub fn footer_hit(
     None
 }
 
+fn confirm_who(view: &AppView<'_>) -> String {
+    let signal = if view.confirm_signal.is_empty() {
+        "TERM"
+    } else {
+        view.confirm_signal
+    };
+    view.confirm_pid.map_or_else(
+        || format!(" {signal}?  "),
+        |pid| {
+            let name = view
+                .snapshot
+                .processes
+                .iter()
+                .find(|p| p.pid == pid)
+                .map(|p| p.name.as_str())
+                .filter(|n| !n.is_empty());
+            match name {
+                Some(name) => format!(" {signal} {name} ({pid})?  "),
+                None => format!(" {signal} pid {pid}?  "),
+            }
+        },
+    )
+}
+
+fn confirm_hit(view: &AppView<'_>, area: Rect, col: u16) -> Option<crate::layout::Hit> {
+    use crate::layout::Hit;
+    let who_w = u16::try_from(confirm_who(view).chars().count()).unwrap_or(0);
+    let y_x = area.x.saturating_add(who_w);
+    if col == y_x {
+        return Some(Hit::ConfirmYes);
+    }
+    let n_x = y_x.saturating_add(7);
+    if col == n_x {
+        return Some(Hit::ConfirmNo);
+    }
+    None
+}
+
 fn footer_chips(view: &AppView<'_>) -> Vec<(&'static str, &'static str, crate::layout::Hit)> {
     use crate::layout::Hit;
     let mut chips = Vec::new();
     if view.detail_pid.is_some() {
+        chips.push(("t", "term", Hit::DetailTerm));
+        chips.push(("k", "kill", Hit::DetailKill));
+        chips.push(("i", "interrupt", Hit::DetailInterrupt));
         chips.push(("esc", "close", Hit::ExpandClose));
     } else if view.expanded.is_some() {
         chips.push(("esc", "home", Hit::ExpandClose));
@@ -205,6 +226,8 @@ mod tests {
         assert_eq!(footer_hit(&fx.view(), area, 30, 20), None);
         fx.focus = Focus::Processes;
         assert_eq!(footer_hit(&fx.view(), area, 14, 20), Some(Hit::Search));
+        fx.detail_pid = Some(904);
+        assert_eq!(footer_hit(&fx.view(), area, 2, 20), Some(Hit::DetailTerm));
     }
 
     #[test]
