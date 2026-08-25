@@ -12,7 +12,8 @@ use crate::theme::Theme;
 use crate::widgets::{AppView, Focus};
 
 pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let rows = filtered(view);
+    let listed = listed(view);
+    let rows: Vec<Process> = listed.iter().map(|r| r.proc.clone()).collect();
     let selected = selected_index(view, &rows);
     let title = Line::from(Span::styled(format!(" proc  {}", rows.len()), theme.dim()));
     let block = panel_block(
@@ -33,7 +34,8 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
 
     let needle = view.proc.filter.to_ascii_lowercase();
     let hit_style = Style::default().fg(theme.hi);
-    let table_rows = rows.iter().map(|proc| {
+    let table_rows = listed.iter().map(|row| {
+        let proc = &row.proc;
         let gpu = if proc.gpu > 0.0 {
             format!("{:.1}", proc.gpu)
         } else {
@@ -47,7 +49,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
                 hit_style,
             ))),
             Cell::from(Line::from(matched_spans(
-                &proc.name,
+                &tree_name(&proc.name, row.depth),
                 &needle,
                 theme.fg(),
                 hit_style,
@@ -380,7 +382,123 @@ pub fn selected_index(view: &AppView<'_>, rows: &[Process]) -> usize {
 
 #[must_use]
 pub fn filtered(view: &AppView<'_>) -> Vec<Process> {
-    filter_sort_by(&view.snapshot.processes, &view.proc.filter, view.sort)
+    listed(view).into_iter().map(|row| row.proc).collect()
+}
+
+struct Listed {
+    proc: Process,
+    depth: u8,
+}
+
+fn listed(view: &AppView<'_>) -> Vec<Listed> {
+    let flat = filter_sort_by(&view.snapshot.processes, &view.proc.filter, view.sort);
+    if view.show_tree {
+        tree_rows(&view.snapshot.processes, &view.proc.filter, view.sort)
+    } else {
+        flat.into_iter()
+            .map(|proc| Listed { proc, depth: 0 })
+            .collect()
+    }
+}
+
+fn tree_name(name: &str, depth: u8) -> String {
+    if depth == 0 {
+        return name.to_owned();
+    }
+    let pad = "  ".repeat(usize::from(depth));
+    format!("{pad}╰ {name}")
+}
+
+fn tree_rows(processes: &[Process], filter: &str, sort: plottypus_core::ProcSort) -> Vec<Listed> {
+    use std::collections::{HashMap, HashSet};
+
+    let needle = filter.to_ascii_lowercase();
+    let by_pid: HashMap<u32, &Process> = processes.iter().map(|p| (p.pid, p)).collect();
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut roots = Vec::new();
+    for proc in processes {
+        if proc.ppid == 0 || proc.ppid == proc.pid || !by_pid.contains_key(&proc.ppid) {
+            roots.push(proc.pid);
+        } else {
+            children.entry(proc.ppid).or_default().push(proc.pid);
+        }
+    }
+
+    let keep = if needle.is_empty() {
+        None
+    } else {
+        let mut keep = HashSet::new();
+        for proc in processes {
+            if proc.name.to_ascii_lowercase().contains(&needle)
+                || proc.pid.to_string().contains(&needle)
+            {
+                let mut walk = Some(proc.pid);
+                while let Some(pid) = walk {
+                    if !keep.insert(pid) {
+                        break;
+                    }
+                    walk = by_pid.get(&pid).and_then(|p| {
+                        if p.ppid == 0 || p.ppid == p.pid {
+                            None
+                        } else {
+                            Some(p.ppid)
+                        }
+                    });
+                }
+            }
+        }
+        Some(keep)
+    };
+
+    let sort_pids = |ids: &mut [u32]| {
+        ids.sort_by(|&a, &b| {
+            let pa = by_pid.get(&a);
+            let pb = by_pid.get(&b);
+            match (pa, pb, sort) {
+                (Some(a), Some(b), plottypus_core::ProcSort::Cpu) => b.cpu.total_cmp(&a.cpu),
+                (Some(a), Some(b), plottypus_core::ProcSort::Mem) => b.mem_bytes.cmp(&a.mem_bytes),
+                (Some(a), Some(b), plottypus_core::ProcSort::Pid) => a.pid.cmp(&b.pid),
+                _ => std::cmp::Ordering::Equal,
+            }
+        });
+    };
+
+    sort_pids(&mut roots);
+    for kids in children.values_mut() {
+        sort_pids(kids);
+    }
+
+    let mut out = Vec::new();
+    for root in roots {
+        walk_tree(root, 0, &by_pid, &children, keep.as_ref(), &mut out);
+    }
+    out
+}
+
+fn walk_tree(
+    pid: u32,
+    depth: u8,
+    by_pid: &std::collections::HashMap<u32, &Process>,
+    children: &std::collections::HashMap<u32, Vec<u32>>,
+    keep: Option<&std::collections::HashSet<u32>>,
+    out: &mut Vec<Listed>,
+) {
+    if let Some(keep) = keep
+        && !keep.contains(&pid)
+    {
+        return;
+    }
+    if let Some(proc) = by_pid.get(&pid) {
+        out.push(Listed {
+            proc: (*proc).clone(),
+            depth,
+        });
+    }
+    if let Some(kids) = children.get(&pid) {
+        for child in kids {
+            walk_tree(*child, depth.saturating_add(1), by_pid, children, keep, out);
+        }
+    }
 }
 
 #[must_use]
@@ -481,6 +599,43 @@ mod tests {
         assert_eq!(spans[0].style.fg, Some(theme.fg));
         let plain = matched_spans("Finder", "zzz", theme.fg(), hit);
         assert_eq!(plain.len(), 1);
+    }
+
+    #[test]
+    fn tree_nests_children_under_parent() {
+        let mut fx = fixture("");
+        fx.show_tree = true;
+        fx.snap.processes = vec![
+            process(10, "parent", 1.0),
+            process(11, "child", 9.0),
+            process(12, "other", 5.0),
+        ];
+        fx.snap.processes[1].ppid = 10;
+        let rows = listed(&fx.view());
+        let names: Vec<(u8, &str)> = rows
+            .iter()
+            .map(|r| (r.depth, r.proc.name.as_str()))
+            .collect();
+        assert!(
+            names.contains(&(0, "parent")) && names.contains(&(1, "child")),
+            "{names:?}"
+        );
+        let parent_at = names.iter().position(|r| r.1 == "parent").unwrap();
+        let child_at = names.iter().position(|r| r.1 == "child").unwrap();
+        assert!(child_at > parent_at, "{names:?}");
+        assert_eq!(tree_name("child", 1), "  ╰ child");
+    }
+
+    #[test]
+    fn tree_filter_keeps_ancestors() {
+        let mut fx = fixture("child");
+        fx.show_tree = true;
+        fx.snap.processes = vec![process(10, "parent", 1.0), process(11, "child", 2.0)];
+        fx.snap.processes[1].ppid = 10;
+        let view = fx.view();
+        let rows = listed(&view);
+        let names: Vec<&str> = rows.iter().map(|r| r.proc.name.as_str()).collect();
+        assert_eq!(names, ["parent", "child"]);
     }
 
     #[test]

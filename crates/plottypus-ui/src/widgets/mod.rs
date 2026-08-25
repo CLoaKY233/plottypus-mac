@@ -96,6 +96,7 @@ pub struct AppView<'a> {
     pub show_fans: bool,
     pub show_cores: bool,
     pub show_threads: bool,
+    pub show_tree: bool,
     pub sort: ProcSort,
     pub detail_pid: Option<u32>,
     pub expanded: Option<Panel>,
@@ -294,6 +295,7 @@ pub(crate) mod tests_support {
         pub searching: bool,
         pub ready: bool,
         pub frozen: bool,
+        pub show_tree: bool,
         pub expanded: Option<crate::layout::Panel>,
     }
 
@@ -351,6 +353,7 @@ pub(crate) mod tests_support {
             searching: false,
             ready: true,
             frozen: false,
+            show_tree: false,
             expanded: None,
         }
     }
@@ -388,6 +391,7 @@ pub(crate) mod tests_support {
                 show_fans: true,
                 show_cores: true,
                 show_threads: false,
+                show_tree: self.show_tree,
                 sort: plottypus_core::ProcSort::Cpu,
                 detail_pid: self.detail_pid,
                 expanded: self.expanded,

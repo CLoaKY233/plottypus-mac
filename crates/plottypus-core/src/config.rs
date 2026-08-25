@@ -45,6 +45,7 @@ pub struct Config {
     pub show_fans: bool,
     pub show_cores: bool,
     pub show_threads: bool,
+    pub show_tree: bool,
     pub proc_sort: ProcSort,
     pub proc_ratio: u16,
 }
@@ -64,6 +65,7 @@ impl Default for Config {
             show_fans: true,
             show_cores: true,
             show_threads: false,
+            show_tree: false,
             proc_sort: ProcSort::Cpu,
             proc_ratio: PROC_RATIO_DEFAULT,
         }
@@ -136,6 +138,9 @@ impl Config {
             "show_threads" => {
                 self.show_threads = value.parse::<bool>().unwrap_or(self.show_threads);
             }
+            "show_tree" => {
+                self.show_tree = value.parse::<bool>().unwrap_or(self.show_tree);
+            }
             "sort" => match value {
                 "cpu" => self.proc_sort = ProcSort::Cpu,
                 "mem" => self.proc_sort = ProcSort::Mem,
@@ -178,6 +183,7 @@ impl Config {
                  show_fans = {}\n\
                  show_cores = {}\n\
                  show_threads = {}\n\
+                 show_tree = {}\n\
                  sort = \"{sort}\"\n\
                  proc_ratio = {}\n",
                 self.interval.as_millis(),
@@ -187,6 +193,7 @@ impl Config {
                 self.show_fans,
                 self.show_cores,
                 self.show_threads,
+                self.show_tree,
                 self.proc_ratio,
             ),
         )

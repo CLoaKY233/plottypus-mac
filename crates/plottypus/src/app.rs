@@ -357,6 +357,10 @@ impl App {
                 self.config.show_threads = !self.config.show_threads;
                 self.touch();
             }
+            Event::ToggleTree => {
+                self.config.show_tree = !self.config.show_tree;
+                self.touch();
+            }
             Event::CycleSort => {
                 self.config.proc_sort = self.config.proc_sort.next();
                 self.touch();
@@ -429,6 +433,10 @@ impl App {
             }
             Event::ToggleThreads => {
                 self.config.show_threads = !self.config.show_threads;
+                self.touch();
+            }
+            Event::ToggleTree => {
+                self.config.show_tree = !self.config.show_tree;
                 self.touch();
             }
             Event::CycleSort => {
@@ -692,6 +700,7 @@ impl App {
             show_fans: self.config.show_fans,
             show_cores: self.config.show_cores,
             show_threads: self.config.show_threads,
+            show_tree: self.config.show_tree,
             sort: self.config.proc_sort,
             detail_pid: self.detail_pid,
             expanded: self.expanded,

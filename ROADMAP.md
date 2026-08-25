@@ -42,7 +42,7 @@ Found in hands-on review against the running binary; each has a regression test 
 - [x] Pin `selected_pid == detail_pid`: arming a kill while the popup shows pid A targets A.
 - [x] Detail enrichment: user, full command path, state, started-ago.
 - [x] Per-pid CPU sparkline from the collector's cached deltas.
-- [ ] Tree view from `ppid`.
+- [x] Tree view from `ppid`.
 - [x] Search matches pids too; highlight matches.
 
 ## Phase 3 — Layout pass

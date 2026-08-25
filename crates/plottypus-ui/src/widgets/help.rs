@@ -65,6 +65,7 @@ fn settings_lines(view: &AppView<'_>) -> Vec<String> {
         String::from(" processes"),
         format!("7  proc sort    {}", view.sort.label()),
         format!("8  threads col  {}", on_off(view.show_threads)),
+        format!("9  proc tree    {}", on_off(view.show_tree)),
         String::new(),
         String::from(" ↗ expands a box · click a process for details"),
         String::from(" esc  close"),
