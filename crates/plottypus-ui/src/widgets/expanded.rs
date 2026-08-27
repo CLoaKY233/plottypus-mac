@@ -806,15 +806,12 @@ fn paint_meta_right(
     let label_h = u16::from(panel == Panel::Mem);
     let mosaic = view.show_cores && panel == Panel::Cpu;
     let mosaic_min = if mosaic { 3 } else { 0 };
-    let reserved = hop_h
-        .saturating_add(label_h)
-        .saturating_add(mosaic_min)
-        .min(area.height);
-    let facts_end = area.y.saturating_add(area.height.saturating_sub(reserved));
+    let keep = hop_h.saturating_add(label_h).saturating_add(mosaic_min);
+    let end = area.y.saturating_add(area.height);
     let mut y = area.y;
     if panel == Panel::Cpu || panel == Panel::Gpu {
         for line in identity_lines(view) {
-            if y >= facts_end {
+            if y.saturating_add(1).saturating_add(keep) > end {
                 break;
             }
             paint_dim_line(frame, area.x, y, area.width, line, theme);
@@ -823,7 +820,7 @@ fn paint_meta_right(
     }
     if panel == Panel::Fans {
         for (name, c) in extra_readings(view) {
-            if y >= facts_end {
+            if y.saturating_add(1).saturating_add(keep) > end {
                 break;
             }
             paint_dim_line(
@@ -837,8 +834,6 @@ fn paint_meta_right(
             y = y.saturating_add(1);
         }
     }
-    y = facts_end;
-    let end = area.y.saturating_add(area.height);
     for (id, hop) in &hops {
         if y.saturating_add(3) > end {
             break;
@@ -1076,8 +1071,19 @@ fn meta_hop_hit(
             } else {
                 0
             };
-            let reserved = hop_h.saturating_add(mosaic_min).min(area.height);
-            let mut y = area.y.saturating_add(area.height.saturating_sub(reserved));
+            let keep = hop_h.saturating_add(mosaic_min);
+            let mut y = area.y;
+            let end = area.y.saturating_add(area.height);
+            if panel == Panel::Cpu || panel == Panel::Gpu {
+                let n = u16::try_from(identity_lines(view).len()).unwrap_or(0);
+                let fit = n.min(end.saturating_sub(y.saturating_add(keep)));
+                y = y.saturating_add(fit);
+            }
+            if panel == Panel::Fans {
+                let n = u16::try_from(extra_readings(view).len()).unwrap_or(0);
+                let fit = n.min(end.saturating_sub(y.saturating_add(keep)));
+                y = y.saturating_add(fit);
+            }
             for (_, hop) in hops {
                 if row >= y && row < y.saturating_add(3) {
                     return Some(hop);
