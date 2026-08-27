@@ -649,14 +649,13 @@ mod render_tests {
             "performance",
             "eff zone",
             "perf zone",
-            "E0",
-            "P0",
             "36°",
             "51°",
         ] {
             assert!(text.contains(want), "missing {want}: {text}");
         }
         assert!(text.contains("busy 70%"), "{text}");
+        assert!(!text.contains("E0"), "mosaic is glyphs, not E0 81%: {text}");
         assert!(!text.contains("power"), "empty power cell: {text}");
         assert!(!text.contains("clock"), "empty clock cell: {text}");
         assert!(
@@ -705,7 +704,6 @@ mod render_tests {
         assert!(text.contains("performance"), "{text}");
         assert!(!text.contains("power"), "{text}");
         assert!(!text.contains("clock"), "{text}");
-        assert!(text.contains("P0"), "{text}");
     }
 
     #[test]
@@ -942,6 +940,28 @@ mod render_tests {
         let text = paint(&view, 80, 24);
         assert!(text.contains("efficiency"), "{text}");
         assert!(!text.contains("E0"), "{text}");
+    }
+
+    #[test]
+    fn expand_cpu_no_cluster_keeps_overall_graph() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        fx.snap.cpu.scaled = 0.33;
+        fx.snap.cpu.cores.clear();
+        let text = paint(&fx.view(), 80, 24);
+        assert!(text.contains("33%") || text.contains("cpu"), "{text}");
+    }
+
+    #[test]
+    fn hop_hit_mem_labelonly_is_one_line() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Mem);
+        let view = fx.view();
+        let area = ratatui::layout::Rect::new(0, 0, 80, 23);
+        let hit = (0..area.height)
+            .rev()
+            .find_map(|y| (0..area.width).find_map(|x| crate::widgets::hop_hit(area, &view, x, y)));
+        assert_eq!(hit, Some(Panel::Processes));
     }
 
     #[test]
