@@ -1,6 +1,6 @@
 use plottypus_core::{
-    ClusterKind, CoreSample, History, Pressure, Scale, Thermal, bits_per_sec, bytes_per_sec,
-    bytes_short, percent_display, watts_display,
+    ClusterKind, CoreSample, History, Pressure, Scale, bits_per_sec, bytes_per_sec, bytes_short,
+    percent_display, ready_pct, watts_display,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -1626,10 +1626,10 @@ fn outer_title(panel: Panel, view: &AppView<'_>, theme: &Theme) -> Line<'static>
             {
                 push_token(&mut spans, format!("{c:.0}°"), theme.temp());
             }
-            if !view.snapshot.thermal.is_nominal() {
+            if let Some(word) = view.snapshot.thermal.word() {
                 push_token(
                     &mut spans,
-                    thermal_word(view.snapshot.thermal).to_owned(),
+                    word.to_owned(),
                     theme.thermal(view.snapshot.thermal),
                 );
             }
@@ -1806,23 +1806,6 @@ fn extra_readings(view: &AppView<'_>) -> Vec<(String, f32)> {
         })
         .map(|r| (r.name.clone(), r.celsius))
         .collect()
-}
-
-fn ready_pct(ready: bool, ratio: f32) -> String {
-    if ready {
-        percent_display(ratio)
-    } else {
-        String::from("…")
-    }
-}
-
-fn thermal_word(thermal: Thermal) -> &'static str {
-    match thermal {
-        Thermal::Nominal => "",
-        Thermal::Fair => "fair",
-        Thermal::Serious => "serious",
-        Thermal::Critical => "critical",
-    }
 }
 
 #[cfg(test)]

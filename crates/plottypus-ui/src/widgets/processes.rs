@@ -13,9 +13,11 @@ use crate::widgets::{AppView, Focus};
 
 pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
     let listed = listed(view);
-    let rows: Vec<Process> = listed.iter().map(|r| r.proc.clone()).collect();
-    let selected = selected_index(view, &rows);
-    let title = Line::from(Span::styled(format!(" proc  {}", rows.len()), theme.dim()));
+    let selected = selected_index(view, listed.iter().map(|r| r.proc.pid));
+    let title = Line::from(Span::styled(
+        format!(" proc  {}", listed.len()),
+        theme.dim(),
+    ));
     let block = panel_block(
         Panel::Processes,
         title,
@@ -30,7 +32,10 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     }
 
     let chunks = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(inner);
-    frame.render_widget(Paragraph::new(search_line(view, &rows, theme)), chunks[0]);
+    frame.render_widget(
+        Paragraph::new(search_line(view, listed.len(), theme)),
+        chunks[0],
+    );
 
     let needle = view.proc.filter.to_ascii_lowercase();
     let hit_style = Style::default().fg(theme.hi);
@@ -87,7 +92,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         .column_spacing(2);
 
     let mut state = TableState::default();
-    if !rows.is_empty() {
+    if !listed.is_empty() {
         state.select(Some(selected));
     }
     if chunks.len() > 1 && chunks[1].height > 0 {
@@ -467,7 +472,7 @@ fn matched_spans(text: &str, needle: &str, base: Style, hit: Style) -> Vec<Span<
     }
 }
 
-fn search_line(view: &AppView<'_>, rows: &[Process], theme: &Theme) -> Line<'static> {
+fn search_line(view: &AppView<'_>, n: usize, theme: &Theme) -> Line<'static> {
     let active = view.searching || matches!(view.focus, Focus::Search);
     let mut query = view.proc.filter.clone();
     if active {
@@ -479,36 +484,37 @@ fn search_line(view: &AppView<'_>, rows: &[Process], theme: &Theme) -> Line<'sta
     Line::from(vec![
         Span::styled(label, if active { theme.title() } else { theme.dim() }),
         Span::styled(query, if active { theme.title() } else { theme.dim() }),
-        Span::styled(format!("  {} procs", rows.len()), theme.dim()),
+        Span::styled(format!("  {n} procs"), theme.dim()),
     ])
 }
 
 #[must_use]
-pub fn selected_index(view: &AppView<'_>, rows: &[Process]) -> usize {
+pub fn selected_index(view: &AppView<'_>, pids: impl IntoIterator<Item = u32>) -> usize {
+    let pids: Vec<u32> = pids.into_iter().collect();
     if let Some(pid) = view.proc.selected_pid
-        && let Some(i) = rows.iter().position(|p| p.pid == pid)
+        && let Some(i) = pids.iter().position(|p| *p == pid)
     {
         return i;
     }
-    view.proc.selected.min(rows.len().saturating_sub(1))
+    view.proc.selected.min(pids.len().saturating_sub(1))
 }
 
 #[must_use]
-pub fn filtered(view: &AppView<'_>) -> Vec<Process> {
+pub fn filtered<'a>(view: &'a AppView<'_>) -> Vec<&'a Process> {
     listed(view).into_iter().map(|row| row.proc).collect()
 }
 
-struct Listed {
-    proc: Process,
+struct Listed<'a> {
+    proc: &'a Process,
     depth: u8,
 }
 
-fn listed(view: &AppView<'_>) -> Vec<Listed> {
-    let flat = filter_sort_by(&view.snapshot.processes, &view.proc.filter, view.sort);
+fn listed<'a>(view: &'a AppView<'_>) -> Vec<Listed<'a>> {
     if view.show_tree {
         tree_rows(&view.snapshot.processes, &view.proc.filter, view.sort)
     } else {
-        flat.into_iter()
+        filter_sort_by(&view.snapshot.processes, &view.proc.filter, view.sort)
+            .into_iter()
             .map(|proc| Listed { proc, depth: 0 })
             .collect()
     }
@@ -522,7 +528,11 @@ fn tree_name(name: &str, depth: u8) -> String {
     format!("{pad}╰ {name}")
 }
 
-fn tree_rows(processes: &[Process], filter: &str, sort: plottypus_core::ProcSort) -> Vec<Listed> {
+fn tree_rows<'a>(
+    processes: &'a [Process],
+    filter: &str,
+    sort: plottypus_core::ProcSort,
+) -> Vec<Listed<'a>> {
     use std::collections::{HashMap, HashSet};
 
     let needle = filter.to_ascii_lowercase();
@@ -542,13 +552,7 @@ fn tree_rows(processes: &[Process], filter: &str, sort: plottypus_core::ProcSort
     } else {
         let mut keep = HashSet::new();
         for proc in processes {
-            if proc.name.to_ascii_lowercase().contains(&needle)
-                || proc.pid.to_string().contains(&needle)
-                || proc
-                    .command
-                    .as_ref()
-                    .is_some_and(|c| c.to_ascii_lowercase().contains(&needle))
-            {
+            if matches_filter(proc, &needle) {
                 let mut walk = Some(proc.pid);
                 while let Some(pid) = walk {
                     if !keep.insert(pid) {
@@ -592,13 +596,13 @@ fn tree_rows(processes: &[Process], filter: &str, sort: plottypus_core::ProcSort
     out
 }
 
-fn walk_tree(
+fn walk_tree<'a>(
     pid: u32,
     depth: u8,
-    by_pid: &std::collections::HashMap<u32, &Process>,
+    by_pid: &std::collections::HashMap<u32, &'a Process>,
     children: &std::collections::HashMap<u32, Vec<u32>>,
     keep: Option<&std::collections::HashSet<u32>>,
-    out: &mut Vec<Listed>,
+    out: &mut Vec<Listed<'a>>,
 ) {
     if let Some(keep) = keep
         && !keep.contains(&pid)
@@ -606,10 +610,7 @@ fn walk_tree(
         return;
     }
     if let Some(proc) = by_pid.get(&pid) {
-        out.push(Listed {
-            proc: (*proc).clone(),
-            depth,
-        });
+        out.push(Listed { proc, depth });
     }
     if let Some(kids) = children.get(&pid) {
         for child in kids {
@@ -618,31 +619,57 @@ fn walk_tree(
     }
 }
 
+fn matches_filter(proc: &Process, needle: &str) -> bool {
+    needle.is_empty()
+        || contains_ignore_ascii(&proc.name, needle)
+        || u32_contains(proc.pid, needle)
+        || proc
+            .command
+            .as_ref()
+            .is_some_and(|c| contains_ignore_ascii(c, needle))
+}
+
+fn contains_ignore_ascii(hay: &str, needle: &str) -> bool {
+    hay.to_ascii_lowercase().contains(needle)
+}
+
+fn u32_contains(n: u32, needle: &str) -> bool {
+    if needle.is_empty() || !needle.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let mut buf = [0u8; 10];
+    let mut x = n;
+    let mut i = 10;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (x % 10) as u8;
+        x /= 10;
+        if x == 0 || i == 0 {
+            break;
+        }
+    }
+    std::str::from_utf8(&buf[i..]).is_ok_and(|s| s.contains(needle))
+}
+
 #[must_use]
 #[cfg(test)]
 pub fn filter_sort(processes: &[Process], filter: &str) -> Vec<Process> {
     filter_sort_by(processes, filter, plottypus_core::ProcSort::Cpu)
+        .into_iter()
+        .cloned()
+        .collect()
 }
 
 #[must_use]
-pub fn filter_sort_by(
-    processes: &[Process],
+pub fn filter_sort_by<'a>(
+    processes: &'a [Process],
     filter: &str,
     sort: plottypus_core::ProcSort,
-) -> Vec<Process> {
+) -> Vec<&'a Process> {
     let needle = filter.to_ascii_lowercase();
-    let mut rows: Vec<Process> = processes
+    let mut rows: Vec<&Process> = processes
         .iter()
-        .filter(|proc| {
-            needle.is_empty()
-                || proc.name.to_ascii_lowercase().contains(&needle)
-                || proc.pid.to_string().contains(&needle)
-                || proc
-                    .command
-                    .as_ref()
-                    .is_some_and(|c| c.to_ascii_lowercase().contains(&needle))
-        })
-        .cloned()
+        .filter(|proc| matches_filter(proc, &needle))
         .collect();
     match sort {
         plottypus_core::ProcSort::Cpu => rows.sort_by(|a, b| b.cpu.total_cmp(&a.cpu)),
@@ -666,7 +693,8 @@ mod tests {
             process(2, "Xcode", 48.1),
             process(3, "plottypus", 0.6),
         ];
-        let rows = filtered(&fx.view());
+        let view = fx.view();
+        let rows = filtered(&view);
         let names: Vec<&str> = rows.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["Xcode", "WindowServer", "plottypus"]);
     }
@@ -679,7 +707,8 @@ mod tests {
             process(2, "Xcode", 48.1),
             process(3, "xcodebuild", 12.0),
         ];
-        let rows = filtered(&fx.view());
+        let view = fx.view();
+        let rows = filtered(&view);
         let names: Vec<&str> = rows.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["Xcode", "xcodebuild"]);
     }
@@ -689,8 +718,9 @@ mod tests {
         let mut fx = fixture("");
         fx.snap.processes = vec![process(1, "a", 1.0), process(2, "b", 9.0)];
         fx.proc.selected_pid = Some(1);
-        let rows = filtered(&fx.view());
-        assert_eq!(selected_index(&fx.view(), &rows), 1);
+        let view = fx.view();
+        let rows = filtered(&view);
+        assert_eq!(selected_index(&view, rows.iter().map(|p| p.pid)), 1);
     }
 
     #[test]
@@ -732,7 +762,8 @@ mod tests {
             process(12, "other", 5.0),
         ];
         fx.snap.processes[1].ppid = 10;
-        let rows = listed(&fx.view());
+        let view = fx.view();
+        let rows = listed(&view);
         let names: Vec<(u8, &str)> = rows
             .iter()
             .map(|r| (r.depth, r.proc.name.as_str()))

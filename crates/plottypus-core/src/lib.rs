@@ -10,7 +10,9 @@ pub use config::{
     PROC_RATIO_DEFAULT, PROC_RATIO_MAX, PROC_RATIO_MIN, ProcSort, SENSOR_PERIOD,
 };
 pub use error::{Error, Result};
-pub use format::{bits_per_sec, bytes_per_sec, bytes_short, percent_display, watts_display};
+pub use format::{
+    bits_per_sec, bytes_per_sec, bytes_short, percent_display, ready_pct, watts_display,
+};
 pub use history::{History, Scale, ScaleRange, capacity_for, nice_ceiling};
 pub use snapshot::{
     Cluster, ClusterKind, CoreSample, CpuSnapshot, DiskSnapshot, DiskVolume, FanMetric,

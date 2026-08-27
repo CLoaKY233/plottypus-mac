@@ -27,16 +27,8 @@ fn fill_missing_temps(snap: &mut Snapshot) {
     if let Some(gpu) = snap.gpu.as_mut()
         && gpu.temp_c.is_none()
     {
-        gpu.temp_c = snap.sensors.gpu_c.or_else(|| gpu_reading(&snap.sensors));
+        gpu.temp_c = snap.sensors.named_gpu_c();
     }
-}
-
-fn gpu_reading(sensors: &SensorsSnapshot) -> Option<f32> {
-    sensors
-        .readings
-        .iter()
-        .find(|r| r.name.to_ascii_lowercase().contains("gpu"))
-        .map(|r| r.celsius)
 }
 
 pub(crate) fn assign_core_roles(cpu: &mut CpuSnapshot, soc: &SocInfo) {

@@ -1,4 +1,4 @@
-use plottypus_core::{Scale, percent_display, watts_display};
+use plottypus_core::{Scale, ready_pct, watts_display};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -61,27 +61,11 @@ fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     spans
 }
 
-fn ready_pct(ready: bool, ratio: f32) -> String {
-    if ready {
-        percent_display(ratio)
-    } else {
-        String::from("…")
-    }
-}
-
 fn gpu_temp_c(view: &AppView<'_>) -> Option<f32> {
     view.snapshot
         .gpu
         .and_then(|g| g.temp_c)
-        .or(view.snapshot.sensors.gpu_c)
-        .or_else(|| {
-            view.snapshot.sensors.readings.iter().find_map(|r| {
-                r.name
-                    .to_ascii_lowercase()
-                    .contains("gpu")
-                    .then_some(r.celsius)
-            })
-        })
+        .or_else(|| view.snapshot.sensors.named_gpu_c())
 }
 
 #[cfg(test)]

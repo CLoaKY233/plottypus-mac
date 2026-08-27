@@ -117,13 +117,19 @@ mod macos {
     const HID_TEMP_FIELD: i32 = 15 << 16;
 
     pub(super) fn open() -> usize {
-        let client = unsafe { IOHIDEventSystemClientCreate(ptr::null()) };
+        let client = unsafe {
+            // SAFETY: default allocator; null means the process default.
+            IOHIDEventSystemClientCreate(ptr::null())
+        };
         if client.is_null() {
             return 0;
         }
         if let Some(matching) = matching_dict() {
-            unsafe { IOHIDEventSystemClientSetMatching(client, matching) };
-            unsafe { CFRelease(matching.cast()) };
+            unsafe {
+                // SAFETY: `client` and `matching` are live CF objects we own.
+                IOHIDEventSystemClientSetMatching(client, matching);
+                CFRelease(matching.cast());
+            }
         }
         client as usize
     }
@@ -142,14 +148,23 @@ mod macos {
             return SensorsSnapshot::default();
         }
         let client = ptr as *mut c_void;
-        let services = unsafe { IOHIDEventSystemClientCopyServices(client) };
+        let services = unsafe {
+            // SAFETY: `client` is the live HID system client from open().
+            IOHIDEventSystemClientCopyServices(client)
+        };
         if services.is_null() {
             return SensorsSnapshot::default();
         }
-        let count = unsafe { CFArrayGetCount(services) };
+        let count = unsafe {
+            // SAFETY: `services` is a CFArray from CopyServices.
+            CFArrayGetCount(services)
+        };
         let mut named = Vec::new();
         for i in 0..count {
-            let service = unsafe { CFArrayGetValueAtIndex(services, i) };
+            let service = unsafe {
+                // SAFETY: `i` is in 0..count of the live array.
+                CFArrayGetValueAtIndex(services, i)
+            };
             if service.is_null() {
                 continue;
             }
@@ -160,6 +175,7 @@ mod macos {
             named.push((name, temp));
         }
         unsafe {
+            // SAFETY: we own the CopyServices array.
             CFRelease(services);
         }
         crate::zones::snapshot_from_named(&named, crate::zones::Source::Hid)
@@ -170,16 +186,21 @@ mod macos {
         let key_usage = cf_str(c"PrimaryUsage")?;
         let mut page: i32 = 0xff00;
         let mut usage: i32 = 0x0005;
-        let num_page =
-            unsafe { CFNumberCreate(ptr::null(), K_CF_NUMBER_SINT32, (&raw mut page).cast()) };
-        let num_usage =
-            unsafe { CFNumberCreate(ptr::null(), K_CF_NUMBER_SINT32, (&raw mut usage).cast()) };
+        let num_page = unsafe {
+            // SAFETY: `page` is a local i32; default allocator.
+            CFNumberCreate(ptr::null(), K_CF_NUMBER_SINT32, (&raw mut page).cast())
+        };
+        let num_usage = unsafe {
+            // SAFETY: `usage` is a local i32; default allocator.
+            CFNumberCreate(ptr::null(), K_CF_NUMBER_SINT32, (&raw mut usage).cast())
+        };
         if num_page.is_null() || num_usage.is_null() {
             return None;
         }
         let keys = [key_page.cast(), key_usage.cast()];
         let vals = [num_page, num_usage];
         let dict = unsafe {
+            // SAFETY: keys/vals are live CF objects; count is 2.
             CFDictionaryCreate(
                 ptr::null(),
                 keys.as_ptr(),
@@ -190,6 +211,7 @@ mod macos {
             )
         };
         unsafe {
+            // SAFETY: we created each of these CF objects above.
             CFRelease(key_page.cast());
             CFRelease(key_usage.cast());
             CFRelease(num_page);
@@ -200,6 +222,7 @@ mod macos {
 
     fn cf_str(text: &std::ffi::CStr) -> Option<CfStringRef> {
         let s = unsafe {
+            // SAFETY: `text` is a valid C string; default allocator.
             CFStringCreateWithCString(ptr::null(), text.as_ptr(), K_CF_STRING_ENCODING_UTF8)
         };
         if s.is_null() { None } else { Some(s) }
@@ -209,14 +232,27 @@ mod macos {
         let Some(key) = cf_str(c"Product") else {
             return String::new();
         };
-        let val = unsafe { IOHIDServiceClientCopyProperty(service, key) };
-        unsafe { CFRelease(key.cast()) };
+        let val = unsafe {
+            // SAFETY: `service` is a live HID service; `key` is a CFString we own.
+            IOHIDServiceClientCopyProperty(service, key)
+        };
+        unsafe {
+            // SAFETY: we created `key`.
+            CFRelease(key.cast());
+        }
         if val.is_null() {
             return String::new();
         }
-        let name = if unsafe { CFGetTypeID(val) } == unsafe { CFStringGetTypeID() } {
+        let name = if unsafe {
+            // SAFETY: `val` is a live CF object from CopyProperty.
+            CFGetTypeID(val)
+        } == unsafe {
+            // SAFETY: CFStringGetTypeID is a constant query.
+            CFStringGetTypeID()
+        } {
             let mut buf = [0_i8; 128];
             let ok = unsafe {
+                // SAFETY: `buf` is a writable C-string buffer.
                 CFStringGetCString(
                     val,
                     buf.as_mut_ptr(),
@@ -237,17 +273,29 @@ mod macos {
         } else {
             String::new()
         };
-        unsafe { CFRelease(val) };
+        unsafe {
+            // SAFETY: we own the CopyProperty value.
+            CFRelease(val);
+        }
         name
     }
 
     fn read_temp(service: CfTypeRef) -> Option<f32> {
-        let event = unsafe { IOHIDServiceClientCopyEvent(service, HID_TEMP_EVENT, ptr::null(), 0) };
+        let event = unsafe {
+            // SAFETY: `service` is a live HID service from the client copy.
+            IOHIDServiceClientCopyEvent(service, HID_TEMP_EVENT, ptr::null(), 0)
+        };
         if event.is_null() {
             return None;
         }
-        let t = unsafe { IOHIDEventGetFloatValue(event, HID_TEMP_FIELD) } as f32;
-        unsafe { CFRelease(event.cast()) };
+        let t = unsafe {
+            // SAFETY: `event` is a HID temperature event we own.
+            IOHIDEventGetFloatValue(event, HID_TEMP_FIELD)
+        } as f32;
+        unsafe {
+            // SAFETY: we own `event`.
+            CFRelease(event.cast());
+        }
         if t.is_finite() && t > 0.0 && t <= 150.0 {
             Some(t)
         } else {

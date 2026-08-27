@@ -15,6 +15,8 @@ mod disk;
 mod fan;
 mod gpu;
 mod hid;
+#[cfg(target_os = "macos")]
+mod iokit;
 mod memory;
 mod net;
 mod process;

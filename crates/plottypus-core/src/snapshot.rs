@@ -96,6 +96,16 @@ impl Thermal {
     pub const fn is_nominal(self) -> bool {
         matches!(self, Self::Nominal)
     }
+
+    #[must_use]
+    pub const fn word(self) -> Option<&'static str> {
+        match self {
+            Self::Nominal => None,
+            Self::Fair => Some("fair"),
+            Self::Serious => Some("serious"),
+            Self::Critical => Some("critical"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -218,6 +228,19 @@ impl SensorsSnapshot {
         self.cpu_c
             .or_else(|| mean_opts(&[self.e_c, self.p_c, self.s_c]))
             .or(self.hotspot_c)
+    }
+
+    #[must_use]
+    pub fn named_gpu_c(&self) -> Option<f32> {
+        self.gpu_c.or_else(|| {
+            self.readings.iter().find_map(|r| {
+                r.name
+                    .as_bytes()
+                    .windows(3)
+                    .any(|w| w.eq_ignore_ascii_case(b"gpu"))
+                    .then_some(r.celsius)
+            })
+        })
     }
 
     pub fn set_zone_temp(&mut self, kind: ClusterKind, temp: f32) {
@@ -538,5 +561,26 @@ mod tests {
         assert!((best - 42.0).abs() < f32::EPSILON);
         sensors.cpu_c = Some(40.0);
         assert_eq!(sensors.best_cpu_c(), Some(40.0));
+    }
+
+    #[test]
+    fn named_gpu_c_uses_reading_when_field_absent() {
+        let mut sensors = SensorsSnapshot {
+            gpu_c: None,
+            readings: vec![TempReading {
+                name: String::from("GPU die"),
+                celsius: 44.0,
+            }],
+            ..SensorsSnapshot::default()
+        };
+        assert_eq!(sensors.named_gpu_c(), Some(44.0));
+        sensors.gpu_c = Some(51.0);
+        assert_eq!(sensors.named_gpu_c(), Some(51.0));
+    }
+
+    #[test]
+    fn thermal_word_is_none_when_nominal() {
+        assert_eq!(Thermal::Nominal.word(), None);
+        assert_eq!(Thermal::Fair.word(), Some("fair"));
     }
 }

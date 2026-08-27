@@ -230,8 +230,6 @@ impl History {
             .collect()
     }
 
-    pub const CHEAP_CAPACITY: usize = 3600;
-
     #[must_use]
     pub fn for_period(period: Duration) -> Self {
         Self::with_capacity(capacity_for(period))

@@ -579,11 +579,11 @@ impl App {
             Some(Hit::ProcRow(idx)) => {
                 self.searching = false;
                 self.focus = Focus::Processes;
-                let rows = self.visible();
-                if let Some(proc) = rows.get(idx) {
-                    self.proc.selected_pid = Some(proc.pid);
+                let pids = self.visible_pids();
+                if let Some(pid) = pids.get(idx).copied() {
+                    self.proc.selected_pid = Some(pid);
                     self.proc.selected = idx;
-                    self.detail_pid = Some(proc.pid);
+                    self.detail_pid = Some(pid);
                 }
             }
             Some(Hit::Panel(panel)) => {
@@ -765,49 +765,52 @@ impl App {
     }
 
     fn move_sel(&mut self, delta: i32) {
-        let rows = self.visible();
-        if rows.is_empty() {
+        let pids = self.visible_pids();
+        if pids.is_empty() {
             self.proc.selected = 0;
             self.proc.selected_pid = None;
             return;
         }
-        let cur = rows
+        let cur = pids
             .iter()
-            .position(|p| Some(p.pid) == self.proc.selected_pid)
-            .unwrap_or(self.proc.selected.min(rows.len() - 1));
+            .position(|pid| Some(*pid) == self.proc.selected_pid)
+            .unwrap_or(self.proc.selected.min(pids.len() - 1));
         let next =
-            (i32::try_from(cur).unwrap_or(0) + delta).clamp(0, (rows.len() - 1) as i32) as usize;
+            (i32::try_from(cur).unwrap_or(0) + delta).clamp(0, (pids.len() - 1) as i32) as usize;
         self.proc.selected = next;
-        self.proc.selected_pid = rows.get(next).map(|p| p.pid);
+        self.proc.selected_pid = pids.get(next).copied();
         if self.detail_pid.is_some() {
             self.detail_pid = self.proc.selected_pid;
         }
     }
 
     fn sync_selection(&mut self) {
-        let rows = self.visible();
-        if rows.is_empty() {
+        let pids = self.visible_pids();
+        if pids.is_empty() {
             self.proc.selected = 0;
             return;
         }
         if let Some(pid) = self.proc.selected_pid
-            && let Some(i) = rows.iter().position(|p| p.pid == pid)
+            && let Some(i) = pids.iter().position(|p| *p == pid)
         {
             self.proc.selected = i;
             return;
         }
-        self.proc.selected = self.proc.selected.min(rows.len() - 1);
-        self.proc.selected_pid = rows.get(self.proc.selected).map(|p| p.pid);
+        self.proc.selected = self.proc.selected.min(pids.len() - 1);
+        self.proc.selected_pid = pids.get(self.proc.selected).copied();
     }
 
-    fn visible(&self) -> Vec<plottypus_core::Process> {
+    fn visible_pids(&self) -> Vec<u32> {
         filtered_processes(&self.view())
+            .into_iter()
+            .map(|p| p.pid)
+            .collect()
     }
 
     fn selected_pid(&self) -> Option<u32> {
         self.proc
             .selected_pid
-            .or_else(|| self.visible().get(self.proc.selected).map(|p| p.pid))
+            .or_else(|| self.visible_pids().get(self.proc.selected).copied())
     }
 
     fn view(&self) -> AppView<'_> {

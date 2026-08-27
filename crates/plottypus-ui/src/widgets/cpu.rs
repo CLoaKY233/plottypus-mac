@@ -1,4 +1,4 @@
-use plottypus_core::{Scale, Thermal, percent_display, watts_display};
+use plottypus_core::{Scale, percent_display, ready_pct, watts_display};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -54,10 +54,10 @@ fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     if let Some(temp) = view.snapshot.cpu.temp_c.or(view.snapshot.sensors.cpu_c) {
         push_token(&mut spans, format!("{temp:.0}°"), theme.temp());
     }
-    if !view.snapshot.thermal.is_nominal() {
+    if let Some(word) = view.snapshot.thermal.word() {
         push_token(
             &mut spans,
-            thermal_word(view.snapshot.thermal).to_owned(),
+            word.to_owned(),
             theme.thermal(view.snapshot.thermal),
         );
     }
@@ -73,23 +73,6 @@ fn busy_span(view: &AppView<'_>, theme: &Theme, spans: &mut Vec<Span<'static>>) 
             format!("busy {}", percent_display(active)),
             theme.dim(),
         );
-    }
-}
-
-fn ready_pct(ready: bool, ratio: f32) -> String {
-    if ready {
-        percent_display(ratio)
-    } else {
-        String::from("…")
-    }
-}
-
-fn thermal_word(thermal: Thermal) -> &'static str {
-    match thermal {
-        Thermal::Nominal => "nominal",
-        Thermal::Fair => "fair",
-        Thermal::Serious => "serious",
-        Thermal::Critical => "critical",
     }
 }
 

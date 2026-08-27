@@ -181,12 +181,18 @@ mod macos {
 
     impl Client {
         pub(super) fn open() -> Option<Self> {
-            let matching = unsafe { IOServiceMatching(c"AppleSMC".as_ptr()) };
+            let matching = unsafe {
+                // SAFETY: class name is a static C string; the dict is consumed below.
+                IOServiceMatching(c"AppleSMC".as_ptr())
+            };
             if matching.is_null() {
                 return None;
             }
             let mut iter: u32 = 0;
-            let kr = unsafe { IOServiceGetMatchingServices(0, matching, &raw mut iter) };
+            let kr = unsafe {
+                // SAFETY: `matching` is a live CF dict; `iter` is an out-iterator.
+                IOServiceGetMatchingServices(0, matching, &raw mut iter)
+            };
             if kr != 0 {
                 return None;
             }
@@ -372,10 +378,16 @@ mod macos {
     impl Drop for Client {
         fn drop(&mut self) {
             if self.connect != 0 {
-                unsafe { IOServiceClose(self.connect) };
+                unsafe {
+                    // SAFETY: `connect` is the user client we opened.
+                    IOServiceClose(self.connect);
+                }
             }
             if self.service != 0 {
-                unsafe { IOObjectRelease(self.service) };
+                unsafe {
+                    // SAFETY: `service` is the IOService we retained from the iterator.
+                    IOObjectRelease(self.service);
+                }
             }
         }
     }
@@ -383,37 +395,56 @@ mod macos {
     fn open_endpoint(iter: u32) -> Option<(u32, u32)> {
         let mut fallback: Option<(u32, u32)> = None;
         loop {
-            let service = unsafe { IOIteratorNext(iter) };
+            let service = unsafe {
+                // SAFETY: `iter` is a live IOKit iterator.
+                IOIteratorNext(iter)
+            };
             if service == 0 {
                 break;
             }
             let name = registry_name(service);
             let mut connect: u32 = 0;
-            let open = unsafe { IOServiceOpen(service, mach_task_self(), 0, &raw mut connect) };
+            let open = unsafe {
+                // SAFETY: `service` is a live IOService; `connect` is an out-handle.
+                IOServiceOpen(service, mach_task_self(), 0, &raw mut connect)
+            };
             if open != 0 || connect == 0 {
-                unsafe { IOObjectRelease(service) };
+                unsafe {
+                    // SAFETY: we own `service` from IOIteratorNext.
+                    IOObjectRelease(service);
+                }
                 continue;
             }
             if name == "AppleSMCKeysEndpoint" {
-                unsafe { IOObjectRelease(iter) };
+                unsafe {
+                    // SAFETY: we own `iter` for the rest of this function.
+                    IOObjectRelease(iter);
+                }
                 return Some((service, connect));
             }
             if fallback.is_none() {
                 fallback = Some((service, connect));
             } else {
                 unsafe {
+                    // SAFETY: extra open we will not keep.
                     IOServiceClose(connect);
                     IOObjectRelease(service);
                 }
             }
         }
-        unsafe { IOObjectRelease(iter) };
+        unsafe {
+            // SAFETY: we own `iter`.
+            IOObjectRelease(iter);
+        }
         fallback
     }
 
     fn registry_name(service: u32) -> String {
         let mut buf = [0_i8; 128];
-        let kr = unsafe { IORegistryEntryGetName(service, buf.as_mut_ptr()) };
+        let kr = unsafe {
+            // SAFETY: `buf` is a 128-byte IOKit name buffer.
+            IORegistryEntryGetName(service, buf.as_mut_ptr())
+        };
         if kr != 0 {
             return String::new();
         }

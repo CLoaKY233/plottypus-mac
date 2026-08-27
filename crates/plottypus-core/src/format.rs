@@ -24,6 +24,15 @@ pub fn percent_display(ratio: f32) -> String {
 }
 
 #[must_use]
+pub fn ready_pct(ready: bool, ratio: f32) -> String {
+    if ready {
+        percent_display(ratio)
+    } else {
+        String::from("…")
+    }
+}
+
+#[must_use]
 pub fn bits_per_sec(bps: u64) -> String {
     const K: f64 = 1000.0;
     const M: f64 = K * 1000.0;

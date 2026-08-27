@@ -64,7 +64,10 @@ mod macos {
 
     fn counters() -> (String, u64, u64) {
         let mut ifap: *mut libc::ifaddrs = ptr::null_mut();
-        let rc = unsafe { libc::getifaddrs(&raw mut ifap) };
+        let rc = unsafe {
+            // SAFETY: `ifap` is an out-pointer; getifaddrs writes a linked list we free.
+            libc::getifaddrs(&raw mut ifap)
+        };
         if rc != 0 || ifap.is_null() {
             return (String::from("—"), 0, 0);
         }
@@ -72,7 +75,10 @@ mod macos {
         let mut cur = ifap;
         while !cur.is_null() {
             // SAFETY: getifaddrs list, terminated by null.
-            let node = unsafe { &*cur };
+            let node = unsafe {
+                // SAFETY: `cur` walks the getifaddrs list until null.
+                &*cur
+            };
             if let Some(row) = read_link(node) {
                 let total = row.1.saturating_add(row.2);
                 let best_total = best.1.saturating_add(best.2);
@@ -82,7 +88,10 @@ mod macos {
             }
             cur = node.ifa_next;
         }
-        unsafe { libc::freeifaddrs(ifap) };
+        unsafe {
+            // SAFETY: `ifap` is the list we got from getifaddrs.
+            libc::freeifaddrs(ifap);
+        }
         best
     }
 
@@ -91,20 +100,29 @@ mod macos {
         if addr.is_null() {
             return None;
         }
-        let family = unsafe { (*addr).sa_family };
+        let family = unsafe {
+            // SAFETY: `addr` is a non-null sockaddr from ifaddrs.
+            (*addr).sa_family
+        };
         if i32::from(family) != libc::AF_LINK {
             return None;
         }
-        let name = unsafe { CStr::from_ptr(node.ifa_name) }
-            .to_string_lossy()
-            .into_owned();
+        let name = unsafe {
+            // SAFETY: ifa_name is a kernel C string on this node.
+            CStr::from_ptr(node.ifa_name)
+        }
+        .to_string_lossy()
+        .into_owned();
         if name.starts_with("lo") || name.starts_with("awdl") || name.starts_with("llw") {
             return None;
         }
         if node.ifa_data.is_null() {
             return None;
         }
-        let data = unsafe { &*(node.ifa_data.cast::<libc::if_data>()) };
+        let data = unsafe {
+            // SAFETY: AF_LINK ifa_data is if_data on macOS.
+            &*(node.ifa_data.cast::<libc::if_data>())
+        };
         Some((name, u64::from(data.ifi_ibytes), u64::from(data.ifi_obytes)))
     }
 }

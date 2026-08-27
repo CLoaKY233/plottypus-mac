@@ -119,83 +119,28 @@ fn prefer_root_over_data(volumes: Vec<DiskVolume>) -> Vec<DiskVolume> {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{DiskCollector, keep_volume, prefer_root_over_data, volume_name};
+    use crate::iokit::{self, CfDictRef};
     use plottypus_core::{DiskSnapshot, DiskVolume};
-    use std::ffi::CStr;
     use std::ptr;
     use std::time::Instant;
 
-    type CfTypeRef = *const std::ffi::c_void;
-    type CfDictRef = *const std::ffi::c_void;
-    type CfStringRef = *const std::ffi::c_void;
-    type CfAllocatorRef = *const std::ffi::c_void;
-
     #[link(name = "IOKit", kind = "framework")]
     unsafe extern "C" {
-        fn IOServiceMatching(name: *const libc::c_char) -> CfDictRef;
-        fn IOServiceGetMatchingServices(
-            port: u32,
-            matching: CfDictRef,
-            existing: *mut u32,
-        ) -> libc::kern_return_t;
-        fn IOIteratorNext(iterator: u32) -> u32;
-        fn IOObjectRelease(obj: u32) -> libc::kern_return_t;
         fn IORegistryEntryCreateCFProperties(
             entry: u32,
             properties: *mut CfDictRef,
-            allocator: CfAllocatorRef,
+            allocator: *const std::ffi::c_void,
             options: u32,
         ) -> libc::kern_return_t;
-        fn CFDictionaryGetValue(dict: CfDictRef, key: CfTypeRef) -> CfTypeRef;
-        fn CFStringCreateWithCString(
-            alloc: CfAllocatorRef,
-            c_str: *const libc::c_char,
-            encoding: u32,
-        ) -> CfStringRef;
-        fn CFGetTypeID(cf: CfTypeRef) -> usize;
-        fn CFDictionaryGetTypeID() -> usize;
-        fn CFNumberGetTypeID() -> usize;
-        fn CFNumberGetValue(
-            number: CfTypeRef,
-            the_type: i32,
-            value_ptr: *mut std::ffi::c_void,
-        ) -> u8;
-        fn CFRelease(cf: CfTypeRef);
     }
 
-    const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
-    const K_CF_NUMBER_SINT64: i32 = 4;
-    const K_CF_NUMBER_FLOAT64: i32 = 6;
-
     pub(super) fn release_ports(ports: &mut Vec<u32>) {
-        for port in ports.drain(..) {
-            unsafe {
-                // SAFETY: each port was retained by IOIteratorNext and is still owned here.
-                IOObjectRelease(port);
-            }
-        }
+        iokit::release_ports(ports);
     }
 
     fn rematch(ports: &mut Vec<u32>) {
-        release_ports(ports);
-        let matching = unsafe { IOServiceMatching(c"IOBlockStorageDriver".as_ptr()) };
-        if matching.is_null() {
-            return;
-        }
-        let mut iter: u32 = 0;
-        let kr = unsafe { IOServiceGetMatchingServices(0, matching, &raw mut iter) };
-        if kr != 0 {
-            return;
-        }
-        loop {
-            let service = unsafe { IOIteratorNext(iter) };
-            if service == 0 {
-                break;
-            }
-            ports.push(service);
-        }
-        unsafe {
-            IOObjectRelease(iter);
-        }
+        iokit::release_ports(ports);
+        *ports = iokit::matching_services(c"IOBlockStorageDriver");
     }
 
     pub(super) fn sample(col: &mut DiskCollector) -> DiskSnapshot {
@@ -297,53 +242,24 @@ mod macos {
 
     fn bytes_for_service(service: u32) -> Option<(u64, u64)> {
         let mut props: CfDictRef = ptr::null();
-        let kr =
-            unsafe { IORegistryEntryCreateCFProperties(service, &raw mut props, ptr::null(), 0) };
+        let kr = unsafe {
+            // SAFETY: `props` is an out-pointer; IOKit writes a +1 CF dict on success.
+            IORegistryEntryCreateCFProperties(service, &raw mut props, ptr::null(), 0)
+        };
         if kr != 0 || props.is_null() {
             return None;
         }
-        let pair = cf_dict_get(props, c"Statistics").and_then(|stats| {
-            if unsafe { CFGetTypeID(stats) } != unsafe { CFDictionaryGetTypeID() } {
+        let pair = iokit::dict_get(props, c"Statistics").and_then(|stats| {
+            if iokit::cf_type_id(stats) != iokit::dict_type_id() {
                 return None;
             }
             Some((
-                cf_dict_u64(stats, c"Bytes (Read)").unwrap_or(0),
-                cf_dict_u64(stats, c"Bytes (Write)").unwrap_or(0),
+                iokit::dict_u64(stats, c"Bytes (Read)").unwrap_or(0),
+                iokit::dict_u64(stats, c"Bytes (Write)").unwrap_or(0),
             ))
         });
-        unsafe { CFRelease(props) };
+        iokit::cf_release(props);
         pair
-    }
-
-    fn cf_dict_get(dict: CfDictRef, key: &CStr) -> Option<CfDictRef> {
-        let cfkey = unsafe {
-            CFStringCreateWithCString(ptr::null(), key.as_ptr(), K_CF_STRING_ENCODING_UTF8)
-        };
-        if cfkey.is_null() {
-            return None;
-        }
-        let val = unsafe { CFDictionaryGetValue(dict, cfkey.cast()) };
-        unsafe { CFRelease(cfkey.cast()) };
-        if val.is_null() { None } else { Some(val) }
-    }
-
-    fn cf_dict_u64(dict: CfTypeRef, key: &CStr) -> Option<u64> {
-        let val = cf_dict_get(dict, key)?;
-        if unsafe { CFGetTypeID(val) } != unsafe { CFNumberGetTypeID() } {
-            return None;
-        }
-        let mut n = 0_i64;
-        let ok = unsafe { CFNumberGetValue(val, K_CF_NUMBER_SINT64, (&raw mut n).cast()) };
-        if ok != 0 {
-            return u64::try_from(n).ok();
-        }
-        let mut f = 0.0_f64;
-        let ok = unsafe { CFNumberGetValue(val, K_CF_NUMBER_FLOAT64, (&raw mut f).cast()) };
-        if ok != 0 && f.is_finite() && f >= 0.0 {
-            Some(f as u64)
-        } else {
-            None
-        }
     }
 }
 
