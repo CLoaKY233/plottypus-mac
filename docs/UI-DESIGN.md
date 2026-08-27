@@ -32,6 +32,21 @@ Two surfaces, nothing else:
 Panel order is fixed everywhere: `cpu · gpu · mem · net · disk · sens · proc`. Tab cycles it,
 Enter expands it, Esc returns home.
 
+A cell or graph is drawn only when the snapshot has a real value. Missing Option metrics
+(`watts`, live MHz, ANE, zone °C, GPU die temp) stay off the board. History rings never
+receive `0.0` for a missing sample. Per-process GPU is not collected on macOS and is not
+shown. Disk compact/expanded graphs are I/O bytes, not the near-static used-ratio.
+
+| Panel | Compact | Expanded | Graph |
+| --- | --- | --- | --- |
+| cpu | % + busy (if scaled≠active) + °C + thermal word + SoC spec | load, power/clock/temp only if present, load + temp graphs, cluster bars, cores if `show_cores` | load auto (10% floor); package °C band |
+| gpu | % + °C + watts if present + core count | util, power/ANE/clock/temp/cores only if present | util auto (10% floor); temp band |
+| mem | used/total + pressure + wired/compr/cache/swap | used, swap/cache if nonzero, composition bars | used % fixed 0–100 |
+| net | iface ↓ ↑ | down / up cells | rx + tx bits, auto scale |
+| disk | volume used/total bar + R/W | volume bars + activity + split read/write | I/O bytes, auto scale |
+| sens | named zone/package °C + fan RPM | per-fan RPM graph, cpu/gpu temp band graphs, readings list | fans RPM auto; temps band |
+| proc | pid name cpu% mem (+ threads) | same table + dossier (identity, live, command, cpu spark, family) | per-pid cpu spark in dossier |
+
 ## 3. Component hierarchy
 
 ```
@@ -76,8 +91,9 @@ Positive space — measured in terminal columns/rows:
 Negative space — what we deliberately leave empty:
 
 - Idle graphs stay empty (no heartbeat dots, no fake axis ink).
-- Fixed-scale axes (percent, celsius) get **no tick column**; celsius shows a single faint scale
-  hint in the plot corner. Only the auto-scaled bit axis earns a gutter.
+- Bit/byte axes keep a 7-col gutter. Auto percent and band °C/RPM show a faint corner hint
+  (`10%`, `45°`, `1.8k`) so a zoomed graph is never mistaken for 0–100. Fixed percent has no
+  hint (the top is 100%).
 - Thermal `nominal` prints nothing. Pressure prints a dot, colored only when it leaves nominal.
 - Footer lists base verbs `? help  q quit`; contextual verbs appear only in context
   (`x kill` over the process table, `esc home` expanded, `f paused` frozen).
@@ -221,6 +237,7 @@ impl Degrade {
 - [x] Glyph/typography system documented; font recommendations for users
 - [x] Clean, comment-light samples; zero unsafe in the UI crate
 - [x] btop/macmon deltas stated above
-- [ ] Remaining build work lives in [ROADMAP.md](../ROADMAP.md): process tree view,
-      battery (IOPS), and the IOReport residency project that unlocks real `scaled`,
-      frequencies, PSTR watts and throttle marks.
+- [x] Empty Option cells (power / clock / zone °C / per-pid GPU) stay off the board
+- [ ] Remaining build work lives in [ROADMAP.md](../ROADMAP.md): battery (IOPS), and
+      the IOReport residency project that unlocks real `scaled`, frequencies, PSTR watts
+      and throttle marks.

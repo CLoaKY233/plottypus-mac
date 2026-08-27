@@ -1,4 +1,4 @@
-use plottypus_core::FanMetric;
+use plottypus_core::{FanMetric, History};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -34,11 +34,21 @@ fn render_compact(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &The
     let named = named_temps(view);
     let fans = present_fans(view);
     if named.is_empty() && fans.is_empty() {
+        return;
+    }
+    let graph = compact_temp_history(view);
+    if area.height < 2 || view.degrade != Degrade::Full || graph.is_none() {
+        render_headline(frame, area, &named, fans, theme);
+        return;
+    }
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
+    render_headline(frame, rows[0], &named, fans, theme);
+    if let Some(history) = graph {
         render_scaled_graph(
             frame,
-            area,
+            rows[1],
             Graph {
-                history: view.cpu_temp_history,
+                history,
                 accent: theme.temp,
                 theme,
                 scale: Scale::Fixed(100.0),
@@ -46,26 +56,7 @@ fn render_compact(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &The
                 ink: GraphInk::Load(view.snapshot.thermal),
             },
         );
-        return;
     }
-    if area.height < 2 || view.degrade != Degrade::Full {
-        render_headline(frame, area, &named, fans, theme);
-        return;
-    }
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
-    render_headline(frame, rows[0], &named, fans, theme);
-    render_scaled_graph(
-        frame,
-        rows[1],
-        Graph {
-            history: view.cpu_temp_history,
-            accent: theme.temp,
-            theme,
-            scale: Scale::Fixed(100.0),
-            axis: Axis::None,
-            ink: GraphInk::Load(view.snapshot.thermal),
-        },
-    );
 }
 
 fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
@@ -145,6 +136,16 @@ fn render_headline(
         );
     } else {
         render_temp_line(frame, area, named, theme);
+    }
+}
+
+fn compact_temp_history<'a>(view: &'a AppView<'_>) -> Option<&'a History> {
+    if !view.cpu_temp_history.is_empty() {
+        Some(view.cpu_temp_history)
+    } else if !view.gpu_temp_history.is_empty() {
+        Some(view.gpu_temp_history)
+    } else {
+        None
     }
 }
 

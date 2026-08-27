@@ -1,11 +1,10 @@
-use plottypus_core::{History, Scale, Thermal, bits_per_sec};
+use plottypus_core::{History, Scale, Thermal, bits_per_sec, bytes_per_sec};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
-use crate::braille::render_cells;
 use crate::layout::Panel;
 use crate::spark;
 use crate::theme::Theme;
@@ -15,7 +14,9 @@ pub enum Axis {
     None,
     Percent,
     Bits,
+    Bytes,
     Celsius,
+    Number,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,8 +63,8 @@ pub struct Graph<'a> {
 }
 
 impl Graph<'_> {
-    fn max(&self) -> f32 {
-        self.history.scale(self.scale)
+    fn range(&self) -> plottypus_core::ScaleRange {
+        self.history.range(self.scale)
     }
 
     fn thermal(&self) -> Thermal {
@@ -78,7 +79,7 @@ pub fn render_scaled_graph(frame: &mut Frame, area: Rect, g: Graph<'_>) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let max = g.max();
+    let range = g.range();
     let gutter = axis_gutter(g.axis, area.width, area.height);
     let plot = Rect {
         x: area.x.saturating_add(gutter),
@@ -91,13 +92,25 @@ pub fn render_scaled_graph(frame: &mut Frame, area: Rect, g: Graph<'_>) {
     }
     if plot.height == 1 {
         frame.render_widget(
-            spark::widget_scaled(g.history, plot.width, max, Style::default().fg(g.accent)),
+            spark::widget_scaled_range(
+                g.history,
+                plot.width,
+                range.min,
+                range.max,
+                Style::default().fg(g.accent),
+            ),
             plot,
         );
         return;
     }
     let thermal = g.thermal();
-    let rows = render_cells(g.history, plot.width, plot.height, max);
+    let rows = crate::braille::render_cells_range(
+        g.history,
+        plot.width,
+        plot.height,
+        range.min,
+        range.max,
+    );
     for (i, row) in rows.iter().enumerate() {
         let y = plot.y.saturating_add(i as u16);
         if y >= plot.y.saturating_add(plot.height) {
@@ -126,21 +139,38 @@ pub fn render_scaled_graph(frame: &mut Frame, area: Rect, g: Graph<'_>) {
             },
         );
     }
-    if g.axis == Axis::Celsius && plot.height >= 3 && plot.width >= 10 {
-        let hint = Rect {
+    let show_hint = g.axis == Axis::Celsius
+        || g.axis == Axis::Number
+        || (g.scale.hints_axis() && g.axis == Axis::Percent);
+    if show_hint && plot.height >= 3 && plot.width >= 10 {
+        let hint_w = 5.min(plot.width);
+        let top = Rect {
             x: plot.x,
             y: plot.y,
-            width: 4.min(plot.width),
+            width: hint_w,
             height: 1,
         };
-        frame.render_widget(Clear, hint);
+        frame.render_widget(Clear, top);
         frame.render_widget(
-            Paragraph::new(Span::styled(axis_label(max, g.axis), g.theme.dim())),
-            hint,
+            Paragraph::new(Span::styled(axis_label(range.max, g.axis), g.theme.dim())),
+            top,
         );
+        if range.min > 0.0 && plot.height >= 4 {
+            let bot = Rect {
+                x: plot.x,
+                y: plot.y.saturating_add(plot.height.saturating_sub(1)),
+                width: hint_w,
+                height: 1,
+            };
+            frame.render_widget(Clear, bot);
+            frame.render_widget(
+                Paragraph::new(Span::styled(axis_label(range.min, g.axis), g.theme.dim())),
+                bot,
+            );
+        }
     }
     if gutter > 0 {
-        render_axis_ticks(frame, area, gutter, max, g.axis, g.theme);
+        render_axis_ticks(frame, area, gutter, range.max, g.axis, g.theme);
     }
 }
 
@@ -172,13 +202,23 @@ pub fn axis_gutter(axis: Axis, width: u16, height: u16) -> u16 {
         return 0;
     }
     let need: u16 = match axis {
-        Axis::None | Axis::Percent | Axis::Celsius => 0,
-        Axis::Bits => 7,
+        Axis::None | Axis::Percent | Axis::Celsius | Axis::Number => 0,
+        Axis::Bits | Axis::Bytes => 7,
     };
     if need == 0 || width <= need.saturating_add(6) {
         0
     } else {
         need
+    }
+}
+
+fn number_label(value: f32) -> String {
+    if value >= 10_000.0 {
+        format!("{:.0}k", f64::from(value) / 1000.0)
+    } else if value >= 1000.0 {
+        format!("{:.1}k", f64::from(value) / 1000.0)
+    } else {
+        format!("{:.0}", value.round())
     }
 }
 
@@ -233,7 +273,9 @@ fn axis_label(value: f32, axis: Axis) -> String {
     match axis {
         Axis::Percent => format!("{:.0}%", (value * 100.0).round()),
         Axis::Bits => bits_per_sec(value.max(0.0) as u64),
+        Axis::Bytes => bytes_per_sec(value.max(0.0) as u64),
         Axis::Celsius => format!("{:.0}°", value.round()),
+        Axis::Number => number_label(value.max(0.0)),
         Axis::None => String::new(),
     }
 }
@@ -282,14 +324,18 @@ mod tests {
     fn percent_axis_labels() {
         assert_eq!(axis_label(1.0, Axis::Percent), "100%");
         assert_eq!(axis_label(0.5, Axis::Percent), "50%");
+        assert_eq!(axis_label(0.10, Axis::Percent), "10%");
+        assert_eq!(axis_label(1800.0, Axis::Number), "1.8k");
     }
 
     #[test]
     fn gutter_is_bits_only() {
         assert_eq!(axis_gutter(Axis::Percent, 40, 8), 0);
         assert_eq!(axis_gutter(Axis::Celsius, 40, 8), 0);
+        assert_eq!(axis_gutter(Axis::Number, 40, 8), 0);
         assert_eq!(axis_gutter(Axis::None, 40, 8), 0);
         assert_eq!(axis_gutter(Axis::Bits, 40, 8), 7);
+        assert_eq!(axis_gutter(Axis::Bytes, 40, 8), 7);
         assert_eq!(axis_gutter(Axis::Bits, 10, 8), 0);
     }
 
@@ -342,6 +388,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn auto_percent_prints_the_ceiling() {
+        use plottypus_core::History;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut history = History::default();
+        for _ in 0..16 {
+            history.push(0.02);
+        }
+        let backend = TestBackend::new(28, 6);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_scaled_graph(
+                    frame,
+                    frame.area(),
+                    Graph {
+                        history: &history,
+                        accent: Theme::default().cpu,
+                        theme: &Theme::default(),
+                        scale: Scale::LOAD,
+                        axis: Axis::Percent,
+                        ink: GraphInk::Flat,
+                    },
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let mut hint = String::new();
+        for x in 0..5 {
+            hint.push_str(buf[(x, 0)].symbol());
+        }
+        assert!(hint.contains("10%"), "hint was {hint:?}");
     }
 
     #[test]

@@ -10,8 +10,8 @@ pub use config::{
     PROC_RATIO_MIN, ProcSort,
 };
 pub use error::{Error, Result};
-pub use format::{bits_per_sec, bytes_short, percent_display, watts_display};
-pub use history::{History, Scale, nice_ceiling};
+pub use format::{bits_per_sec, bytes_per_sec, bytes_short, percent_display, watts_display};
+pub use history::{History, Scale, ScaleRange, nice_ceiling};
 pub use snapshot::{
     Cluster, ClusterKind, CoreSample, CpuSnapshot, DiskSnapshot, DiskVolume, FanMetric,
     FanSnapshot, GpuSnapshot, MemorySnapshot, NetworkSnapshot, Pressure, Process, SensorsSnapshot,

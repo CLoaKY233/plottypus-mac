@@ -10,8 +10,13 @@ pub fn bars(history: &History, width: u16) -> Vec<u64> {
 
 #[must_use]
 pub fn bars_scaled(history: &History, width: u16, scale: f32) -> Vec<u64> {
+    bars_scaled_range(history, width, 0.0, scale)
+}
+
+#[must_use]
+pub fn bars_scaled_range(history: &History, width: u16, min: f32, max: f32) -> Vec<u64> {
     let width = width.max(1) as usize;
-    let samples = history.downsample_norm(width, scale);
+    let samples = history.downsample_norm_range(width, min, max);
     if samples.is_empty() {
         return vec![0; width];
     }
@@ -33,7 +38,18 @@ pub fn widget_scaled(
     scale: f32,
     style: Style,
 ) -> Sparkline<'static> {
-    let data = bars_scaled(history, width, scale);
+    widget_scaled_range(history, width, 0.0, scale, style)
+}
+
+#[must_use]
+pub fn widget_scaled_range(
+    history: &History,
+    width: u16,
+    min: f32,
+    max: f32,
+    style: Style,
+) -> Sparkline<'static> {
+    let data = bars_scaled_range(history, width, min, max);
     Sparkline::default()
         .data(data.into_iter().map(SparklineBar::from).collect::<Vec<_>>())
         .max(100)

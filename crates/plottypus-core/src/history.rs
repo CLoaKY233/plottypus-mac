@@ -5,20 +5,98 @@ const DEFAULT_CAPACITY: usize = 900;
 /// How a history is mapped onto 0..=1 for drawing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Scale {
-    /// Always this max (CPU / GPU / MEM are 0..=1 → 100%).
+    /// Always this max from 0 (MEM used-ratio stays 0..=1).
     Fixed(f32),
     /// Grow to a 1-2-5 ceiling of the window peak, never below `floor`.
+    /// btop's percent rescale floors at 10% so a 1% series still has shape.
     Auto { floor: f32 },
+    /// Window min/max plus pad, never thinner than `min_span`. Temps live here.
+    Band { pad: f32, min_span: f32 },
 }
 
 impl Scale {
+    /// Load / util: 10% floor, same rescale-down as btop.
+    pub const LOAD: Self = Self::Auto { floor: 0.10 };
+    /// Die / package °C: zoom to the recent band.
+    pub const TEMP: Self = Self::Band {
+        pad: 3.0,
+        min_span: 12.0,
+    };
+    /// Fan RPM from 0, floor 500 so idle 0 stays a flat line.
+    pub const FAN: Self = Self::Auto { floor: 500.0 };
+
     #[must_use]
     pub fn resolve(self, peak: f32) -> f32 {
         match self {
             Self::Fixed(max) => max.max(f32::EPSILON),
             Self::Auto { floor } => nice_ceiling(peak.max(floor).max(0.0)),
+            Self::Band { pad, min_span } => nice_ceiling((peak + pad).max(min_span).max(0.0)),
         }
     }
+
+    #[must_use]
+    pub fn range(self, history: &History) -> ScaleRange {
+        match self {
+            Self::Fixed(max) => ScaleRange {
+                min: 0.0,
+                max: max.max(f32::EPSILON),
+            },
+            Self::Auto { floor } => ScaleRange {
+                min: 0.0,
+                max: nice_ceiling(history.max().unwrap_or(0.0).max(floor).max(0.0)),
+            },
+            Self::Band { pad, min_span } => band_range(history, pad, min_span),
+        }
+    }
+
+    #[must_use]
+    pub const fn hints_axis(self) -> bool {
+        matches!(self, Self::Auto { .. } | Self::Band { .. })
+    }
+}
+
+/// Inclusive draw window. Values map as `(v - min) / (max - min)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScaleRange {
+    pub min: f32,
+    pub max: f32,
+}
+
+impl ScaleRange {
+    #[must_use]
+    pub fn span(self) -> f32 {
+        (self.max - self.min).max(f32::EPSILON)
+    }
+}
+
+fn band_range(history: &History, pad: f32, min_span: f32) -> ScaleRange {
+    let lo_v = history.min().unwrap_or(0.0);
+    let hi_v = history.max().unwrap_or(0.0);
+    let mut lo = lo_v - pad;
+    let mut hi = hi_v + pad;
+    let span = hi - lo;
+    if span < min_span {
+        let extra = (min_span - span) / 2.0;
+        lo -= extra;
+        hi += extra;
+    }
+    lo = lo.max(0.0);
+    lo = snap_down(lo, 5.0);
+    hi = snap_up(hi, 5.0);
+    if hi <= lo {
+        hi = lo + min_span.max(5.0);
+    }
+    ScaleRange { min: lo, max: hi }
+}
+
+fn snap_down(value: f32, step: f32) -> f32 {
+    let step = step.max(f32::EPSILON);
+    (value / step).floor() * step
+}
+
+fn snap_up(value: f32, step: f32) -> f32 {
+    let step = step.max(f32::EPSILON);
+    (value / step).ceil() * step
 }
 
 /// Next 1 / 2 / 5 × 10^n above `value`. Never 0.
@@ -95,6 +173,11 @@ impl History {
         self.samples.iter().copied().reduce(f32::max)
     }
 
+    #[must_use]
+    pub fn min(&self) -> Option<f32> {
+        self.samples.iter().copied().reduce(f32::min)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = f32> + '_ {
         self.samples.iter().copied()
     }
@@ -126,16 +209,27 @@ impl History {
     /// Downsample then divide by `scale` so callers get 0..=1 columns.
     #[must_use]
     pub fn downsample_norm(&self, buckets: usize, scale: f32) -> Vec<f32> {
-        let scale = scale.max(f32::EPSILON);
+        self.downsample_norm_range(buckets, 0.0, scale)
+    }
+
+    /// Downsample then map `min..=max` onto 0..=1.
+    #[must_use]
+    pub fn downsample_norm_range(&self, buckets: usize, min: f32, max: f32) -> Vec<f32> {
+        let span = (max - min).max(f32::EPSILON);
         self.downsample(buckets)
             .into_iter()
-            .map(|v| (v / scale).clamp(0.0, 1.0))
+            .map(|v| ((v - min) / span).clamp(0.0, 1.0))
             .collect()
     }
 
     #[must_use]
+    pub fn range(&self, mode: Scale) -> ScaleRange {
+        mode.range(self)
+    }
+
+    #[must_use]
     pub fn scale(&self, mode: Scale) -> f32 {
-        mode.resolve(self.max().unwrap_or(0.0))
+        self.range(mode).max
     }
 }
 
@@ -207,5 +301,34 @@ mod tests {
         h.push(0.1);
         assert!((h.last().unwrap_or(0.0) - 0.1).abs() < f32::EPSILON);
         assert!((h.max().unwrap_or(0.0) - 0.7).abs() < f32::EPSILON);
+        assert!((h.min().unwrap_or(0.0) - 0.1).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn load_auto_floors_at_ten_percent() {
+        let mut h = History::with_capacity(8);
+        h.push(0.012);
+        h.push(0.018);
+        let range = h.range(Scale::LOAD);
+        assert!((range.min - 0.0).abs() < f32::EPSILON);
+        assert!((range.max - 0.10).abs() < 1e-5);
+        let norm = h.downsample_norm_range(2, range.min, range.max);
+        assert!(norm.iter().all(|v| *v > 0.05), "{norm:?}");
+        assert!(norm[1] > 0.10, "{norm:?}");
+    }
+
+    #[test]
+    fn temp_band_zooms_to_the_window() {
+        let mut h = History::with_capacity(8);
+        h.push(38.0);
+        h.push(42.0);
+        h.push(40.0);
+        let range = h.range(Scale::TEMP);
+        assert!(range.min <= 35.0, "{range:?}");
+        assert!(range.max >= 45.0, "{range:?}");
+        assert!(range.span() >= 12.0);
+        let norm = h.downsample_norm_range(3, range.min, range.max);
+        assert!(norm.iter().all(|v| (0.0..=1.0).contains(v)));
+        assert!(norm[1] > norm[0], "{norm:?}");
     }
 }

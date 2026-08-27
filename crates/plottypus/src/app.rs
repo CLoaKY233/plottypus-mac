@@ -79,11 +79,14 @@ struct App {
     net_rx_history: History,
     net_tx_history: History,
     disk_history: History,
+    disk_read_history: History,
+    disk_write_history: History,
     cpu_temp_history: History,
     gpu_temp_history: History,
     e_temp_history: History,
     p_temp_history: History,
     s_temp_history: History,
+    fan_histories: Vec<History>,
     surface: Surface,
     focus: Focus,
     expanded: Option<Panel>,
@@ -120,11 +123,14 @@ impl App {
             net_rx_history: History::default(),
             net_tx_history: History::default(),
             disk_history: History::default(),
+            disk_read_history: History::default(),
+            disk_write_history: History::default(),
             cpu_temp_history: History::default(),
             gpu_temp_history: History::default(),
             e_temp_history: History::default(),
             p_temp_history: History::default(),
             s_temp_history: History::default(),
+            fan_histories: Vec::new(),
             surface: Surface::Work,
             focus: Focus::Processes,
             expanded: None,
@@ -202,8 +208,9 @@ impl App {
         self.snapshot = snapshot;
         let snap = &self.snapshot;
         self.cpu_history.push(snap.cpu.scaled);
-        let gpu = snap.gpu.map_or(0.0, |g| g.scaled);
-        self.gpu_history.push(gpu);
+        if let Some(gpu) = snap.gpu {
+            self.gpu_history.push(gpu.scaled);
+        }
         let mem_total = snap.memory.total_bytes;
         let mem = if mem_total == 0 {
             0.0
@@ -213,14 +220,18 @@ impl App {
         self.mem_history.push(mem);
         self.net_rx_history.push(snap.network.rx_bps as f32);
         self.net_tx_history.push(snap.network.tx_bps as f32);
-        self.disk_history.push(snap.disk.used_ratio());
-        self.cpu_temp_history
-            .push(snap.cpu.temp_c.or(snap.sensors.best_cpu_c()).unwrap_or(0.0));
-        self.gpu_temp_history.push(
-            snap.gpu
-                .and_then(|g| g.temp_c)
-                .or(snap.sensors.gpu_c)
-                .unwrap_or(0.0),
+        let disk_io = snap.disk.read_bps.saturating_add(snap.disk.write_bps);
+        self.disk_history.push(disk_io as f32);
+        self.disk_read_history.push(snap.disk.read_bps as f32);
+        self.disk_write_history.push(snap.disk.write_bps as f32);
+        push_fans(&mut self.fan_histories, &snap.fans.fans);
+        push_temp(
+            &mut self.cpu_temp_history,
+            snap.cpu.temp_c.or(snap.sensors.best_cpu_c()),
+        );
+        push_temp(
+            &mut self.gpu_temp_history,
+            snap.gpu.and_then(|g| g.temp_c).or(snap.sensors.gpu_c),
         );
         push_temp(&mut self.e_temp_history, snap.sensors.e_c);
         push_temp(&mut self.p_temp_history, snap.sensors.p_c);
@@ -733,11 +744,14 @@ impl App {
             net_rx_history: &self.net_rx_history,
             net_tx_history: &self.net_tx_history,
             disk_history: &self.disk_history,
+            disk_read_history: &self.disk_read_history,
+            disk_write_history: &self.disk_write_history,
             cpu_temp_history: &self.cpu_temp_history,
             gpu_temp_history: &self.gpu_temp_history,
             e_temp_history: &self.e_temp_history,
             p_temp_history: &self.p_temp_history,
             s_temp_history: &self.s_temp_history,
+            fan_histories: &self.fan_histories,
             surface: self.effective_surface(),
             degrade: plottypus_ui::Degrade::Full,
             focus: self.focus,
@@ -785,6 +799,18 @@ fn push_temp(history: &mut History, temp: Option<f32>) {
     }
 }
 
+fn push_fans(histories: &mut Vec<History>, fans: &[plottypus_core::FanMetric]) {
+    let n = fans.len().min(4);
+    while histories.len() < n {
+        histories.push(History::default());
+    }
+    for (i, fan) in fans.iter().take(n).enumerate() {
+        if let Some(history) = histories.get_mut(i) {
+            history.push(f32::from(fan.rpm));
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -829,6 +855,39 @@ mod tests {
             app.snapshot.memory.used_bytes as f32 / app.snapshot.memory.total_bytes as f32
         };
         assert_eq!(app.mem_history.last(), Some(mem));
+    }
+
+    #[test]
+    fn missing_option_metrics_do_not_zero_fill_history() {
+        let mut app = App::new().unwrap();
+        let cpu_len = app.cpu_temp_history.len();
+        let gpu_len = app.gpu_temp_history.len();
+        let gpu_util_len = app.gpu_history.len();
+        let mut snap = app.snapshot.clone();
+        snap.cpu.temp_c = None;
+        snap.sensors = plottypus_core::SensorsSnapshot::default();
+        snap.gpu = None;
+        snap.disk.read_bps = 1_024;
+        snap.disk.write_bps = 512;
+        app.apply_snapshot(snap);
+        assert_eq!(app.cpu_temp_history.len(), cpu_len);
+        assert_eq!(app.gpu_temp_history.len(), gpu_len);
+        assert_eq!(app.gpu_history.len(), gpu_util_len);
+        assert_eq!(app.disk_history.last(), Some(1_536.0));
+        assert_eq!(app.disk_read_history.last(), Some(1_024.0));
+        assert_eq!(app.disk_write_history.last(), Some(512.0));
+
+        let mut snap = app.snapshot.clone();
+        snap.cpu.temp_c = Some(42.0);
+        snap.gpu = Some(plottypus_core::GpuSnapshot {
+            scaled: 0.25,
+            temp_c: Some(51.0),
+            ..plottypus_core::GpuSnapshot::default()
+        });
+        app.apply_snapshot(snap);
+        assert_eq!(app.cpu_temp_history.last(), Some(42.0));
+        assert_eq!(app.gpu_temp_history.last(), Some(51.0));
+        assert_eq!(app.gpu_history.last(), Some(0.25));
     }
 
     #[test]

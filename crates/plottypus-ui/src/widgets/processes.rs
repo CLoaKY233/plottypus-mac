@@ -36,11 +36,6 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     let hit_style = Style::default().fg(theme.hi);
     let table_rows = listed.iter().map(|row| {
         let proc = &row.proc;
-        let gpu = if proc.gpu > 0.0 {
-            format!("{:.1}", proc.gpu)
-        } else {
-            String::from("—")
-        };
         let mut cells = vec![
             Cell::from(Line::from(matched_spans(
                 &format!("{:>7}", proc.pid),
@@ -55,7 +50,6 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
                 hit_style,
             ))),
             Cell::from(Span::styled(format!("{:>6.1}", proc.cpu), theme.cpu())),
-            Cell::from(Span::styled(format!("{gpu:>5}"), theme.dim())),
             Cell::from(Span::styled(
                 format!("{:>7}", bytes_short(proc.mem_bytes)),
                 theme.fg(),
@@ -74,14 +68,12 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         Constraint::Length(7),
         Constraint::Fill(1),
         Constraint::Length(7),
-        Constraint::Length(6),
         Constraint::Length(8),
     ];
     let mut headers = vec![
         sort_header("pid", view.sort == plottypus_core::ProcSort::Pid),
         String::from("name"),
         sort_header("cpu%", view.sort == plottypus_core::ProcSort::Cpu),
-        String::from("  gpu"),
         sort_header("mem", view.sort == plottypus_core::ProcSort::Mem),
     ];
     if view.show_threads {
@@ -310,11 +302,6 @@ fn paint_identity(
 }
 
 fn paint_live(frame: &mut Frame, area: Rect, proc: &Process, theme: &Theme) {
-    let gpu = if proc.gpu > 0.0 {
-        format!("{:.1}", proc.gpu)
-    } else {
-        String::from("—")
-    };
     let inner = cell(frame, area, "live", theme);
     let mut spans = Vec::new();
     push_kv(
@@ -338,7 +325,6 @@ fn paint_live(frame: &mut Frame, area: Rect, proc: &Process, theme: &Theme) {
         format!("{:>4}", proc.threads),
         theme.fg(),
     );
-    push_kv(&mut spans, theme, "gpu", gpu, theme.dim());
     frame.render_widget(
         Paragraph::new(wrap_spans(spans, usize::from(inner.width.max(1)))),
         inner,

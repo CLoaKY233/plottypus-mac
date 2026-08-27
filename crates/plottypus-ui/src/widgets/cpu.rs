@@ -1,4 +1,4 @@
-use plottypus_core::{Scale, percent_display, watts_display};
+use plottypus_core::{Scale, Thermal, percent_display, watts_display};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
             history: view.cpu_history,
             accent: theme.cpu,
             theme,
-            scale: Scale::Fixed(1.0),
+            scale: Scale::LOAD,
             axis: Axis::Percent,
             ink: GraphInk::Load(view.snapshot.thermal),
         },
@@ -65,6 +65,13 @@ fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     }
     if let Some(temp) = view.snapshot.cpu.temp_c.or(view.snapshot.sensors.cpu_c) {
         push_token(&mut spans, format!("{temp:.0}°"), theme.temp());
+    }
+    if !view.snapshot.thermal.is_nominal() {
+        push_token(
+            &mut spans,
+            thermal_word(view.snapshot.thermal).to_owned(),
+            theme.thermal(view.snapshot.thermal),
+        );
     }
     Line::from(spans)
 }
@@ -137,6 +144,15 @@ fn freq_label(mhz: u32) -> String {
     }
 }
 
+fn thermal_word(thermal: Thermal) -> &'static str {
+    match thermal {
+        Thermal::Nominal => "nominal",
+        Thermal::Fair => "fair",
+        Thermal::Serious => "serious",
+        Thermal::Critical => "critical",
+    }
+}
+
 fn line_has_text(line: &Line<'_>) -> bool {
     line.spans.iter().any(|s| !s.content.is_empty())
 }
@@ -188,6 +204,19 @@ mod tests {
         let text = line_text(&title(&fx.view(), &Theme::default()));
         assert!(text.contains("18%"), "{text}");
         assert!(text.contains("busy 41%"), "{text}");
+    }
+
+    #[test]
+    fn title_marks_thermal_when_not_nominal() {
+        let mut fx = fixture("");
+        fx.ready = true;
+        fx.snap.thermal = Thermal::Fair;
+        let text = line_text(&title(&fx.view(), &Theme::default()));
+        assert!(text.contains("fair"), "{text}");
+        fx.snap.thermal = Thermal::Nominal;
+        let text = line_text(&title(&fx.view(), &Theme::default()));
+        assert!(!text.contains("nominal"), "{text}");
+        assert!(!text.contains("fair"), "{text}");
     }
 
     #[test]

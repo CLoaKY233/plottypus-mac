@@ -73,11 +73,14 @@ pub struct AppView<'a> {
     pub net_rx_history: &'a History,
     pub net_tx_history: &'a History,
     pub disk_history: &'a History,
+    pub disk_read_history: &'a History,
+    pub disk_write_history: &'a History,
     pub cpu_temp_history: &'a History,
     pub gpu_temp_history: &'a History,
     pub e_temp_history: &'a History,
     pub p_temp_history: &'a History,
     pub s_temp_history: &'a History,
+    pub fan_histories: &'a [History],
     pub surface: Surface,
     pub degrade: Degrade,
     pub focus: Focus,
@@ -278,11 +281,14 @@ pub(crate) mod tests_support {
         pub net_rx: History,
         pub net_tx: History,
         pub disk: History,
+        pub disk_read: History,
+        pub disk_write: History,
         pub cpu_temp: History,
         pub gpu_temp: History,
         pub e_temp: History,
         pub p_temp: History,
         pub s_temp: History,
+        pub fans: Vec<History>,
         pub proc: ProcView,
         pub surface: Surface,
         pub degrade: Degrade,
@@ -333,11 +339,14 @@ pub(crate) mod tests_support {
             net_rx: History::default(),
             net_tx: History::default(),
             disk: History::default(),
+            disk_read: History::default(),
+            disk_write: History::default(),
             cpu_temp: History::default(),
             gpu_temp: History::default(),
             e_temp: History::default(),
             p_temp: History::default(),
             s_temp: History::default(),
+            fans: Vec::new(),
             proc: ProcView {
                 filter: filter.to_owned(),
                 ..ProcView::default()
@@ -370,11 +379,14 @@ pub(crate) mod tests_support {
                 net_rx_history: &self.net_rx,
                 net_tx_history: &self.net_tx,
                 disk_history: &self.disk,
+                disk_read_history: &self.disk_read,
+                disk_write_history: &self.disk_write,
                 cpu_temp_history: &self.cpu_temp,
                 gpu_temp_history: &self.gpu_temp,
                 e_temp_history: &self.e_temp,
                 p_temp_history: &self.p_temp,
                 s_temp_history: &self.s_temp,
+                fan_histories: &self.fans,
                 surface: self.surface,
                 focus: self.focus,
                 proc: &self.proc,
@@ -409,7 +421,7 @@ pub(crate) mod tests_support {
 mod render_tests {
     use plottypus_core::{
         ClusterKind, CoreSample, DiskSnapshot, DiskVolume, FanMetric, FanSnapshot, GpuSnapshot,
-        Surface,
+        History, Surface,
     };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -606,9 +618,8 @@ mod render_tests {
         let text = paint(&fx.view(), 80, 24);
         for want in [
             "load",
-            "power",
-            "clock",
             "cpu",
+            "cpu temp",
             "efficiency",
             "performance",
             "E0",
@@ -619,6 +630,8 @@ mod render_tests {
             assert!(text.contains(want), "missing {want}: {text}");
         }
         assert!(text.contains("busy 70%"), "{text}");
+        assert!(!text.contains("power"), "empty power cell: {text}");
+        assert!(!text.contains("clock"), "empty clock cell: {text}");
         assert!(
             !text.contains("Macintosh"),
             "other panels must hide: {text}"
@@ -640,11 +653,127 @@ mod render_tests {
         });
         let text = paint(&fx.view(), 80, 24);
         for want in [
-            "util", "power", "clock", "gpu util", "gpu temp", "12%", "51°", "461MHz",
+            "util", "power", "clock", "temp", "gpu util", "gpu temp", "12%", "51°", "461MHz",
         ] {
             assert!(text.contains(want), "missing {want}: {text}");
         }
         assert!(!text.contains("no readings on this machine"), "{text}");
+    }
+
+    #[test]
+    fn expand_cpu_hides_empty_power_and_clock() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        fx.snap.cpu.scaled = 0.4;
+        fx.snap.cpu.active = 0.4;
+        fx.snap.cpu.watts = None;
+        fx.snap.cpu.freq_mhz = None;
+        fx.snap.cpu.cores = vec![CoreSample {
+            kind: ClusterKind::Performance,
+            index: 0,
+            scaled: 0.4,
+            active: 0.4,
+        }];
+        let text = paint(&fx.view(), 80, 24);
+        assert!(text.contains("load"), "{text}");
+        assert!(!text.contains("power"), "{text}");
+        assert!(!text.contains("clock"), "{text}");
+        assert!(text.contains("P0"), "{text}");
+    }
+
+    #[test]
+    fn expand_gpu_hides_empty_optional_cells() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Gpu);
+        fx.ready = true;
+        fx.snap.gpu = Some(GpuSnapshot {
+            scaled: 0.22,
+            ..GpuSnapshot::default()
+        });
+        fx.snap.soc.gpu_cores = 0;
+        let text = paint(&fx.view(), 80, 24);
+        assert!(text.contains("util"), "{text}");
+        assert!(text.contains("gpu util"), "{text}");
+        assert!(!text.contains("power"), "{text}");
+        assert!(!text.contains("clock"), "{text}");
+        assert!(!text.contains("gpu temp"), "{text}");
+    }
+
+    #[test]
+    fn expand_disk_graphs_io_not_capacity() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Disk);
+        fx.snap.disk = DiskSnapshot {
+            volumes: vec![DiskVolume {
+                name: String::from("Macintosh HD"),
+                mount: String::from("/"),
+                used_bytes: 400 * 1024 * 1024 * 1024,
+                total_bytes: 926 * 1024 * 1024 * 1024,
+            }],
+            read_bps: 2 * 1024 * 1024,
+            write_bps: 512 * 1024,
+        };
+        let text = paint(&fx.view(), 80, 24);
+        assert!(text.contains("volumes"), "{text}");
+        assert!(text.contains("Macintosh HD"), "{text}");
+        assert!(text.contains("activity"), "{text}");
+        assert!(text.contains("read io"), "{text}");
+        assert!(text.contains("write io"), "{text}");
+        assert!(text.contains("2M/s"), "{text}");
+        assert!(!text.contains("primary volume"), "{text}");
+    }
+
+    #[test]
+    fn expand_sensors_graphs_each_fan() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Fans);
+        fx.snap.fans = FanSnapshot {
+            fans: vec![
+                FanMetric {
+                    name: String::from("Fan 1"),
+                    rpm: 1200,
+                    max_rpm: 6000,
+                },
+                FanMetric {
+                    name: String::from("Fan 2"),
+                    rpm: 1850,
+                    max_rpm: 6000,
+                },
+            ],
+        };
+        fx.snap.sensors.cpu_c = Some(42.0);
+        fx.fans = vec![{
+            let mut h = History::default();
+            for rpm in [800.0, 1000.0, 1200.0] {
+                h.push(rpm);
+            }
+            h
+        }];
+        fx.cpu_temp.push(40.0);
+        fx.cpu_temp.push(42.0);
+        let text = paint(&fx.view(), 100, 30);
+        assert!(text.contains("Fan 1"), "{text}");
+        assert!(text.contains("Fan 2"), "{text}");
+        assert!(text.contains("1200 rpm"), "{text}");
+        assert!(text.contains("1850 rpm"), "{text}");
+        assert!(text.contains("cpu temp"), "{text}");
+    }
+
+    #[test]
+    fn expand_cpu_honors_show_cores_off() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        fx.snap.cpu.cores = vec![CoreSample {
+            kind: ClusterKind::Efficiency,
+            index: 0,
+            scaled: 0.3,
+            active: 0.3,
+        }];
+        let mut view = fx.view();
+        view.show_cores = false;
+        let text = paint(&view, 80, 24);
+        assert!(text.contains("efficiency"), "{text}");
+        assert!(!text.contains("E0"), "{text}");
     }
 
     #[test]

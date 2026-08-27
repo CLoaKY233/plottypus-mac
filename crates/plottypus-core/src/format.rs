@@ -41,6 +41,11 @@ pub fn bits_per_sec(bps: u64) -> String {
 }
 
 #[must_use]
+pub fn bytes_per_sec(bps: u64) -> String {
+    format!("{}/s", bytes_short(bps))
+}
+
+#[must_use]
 pub fn watts_display(watts: f32) -> String {
     if watts >= 10.0 {
         format!("{watts:.0}W")
@@ -78,5 +83,7 @@ mod tests {
     fn throughput_scale() {
         assert_eq!(bits_per_sec(800), "800b");
         assert_eq!(bits_per_sec(12_400_000), "12.4Mb");
+        assert_eq!(bytes_per_sec(800), "800B/s");
+        assert_eq!(bytes_per_sec(12 * 1024 * 1024), "12M/s");
     }
 }

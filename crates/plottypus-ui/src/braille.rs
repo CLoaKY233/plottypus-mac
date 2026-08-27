@@ -70,6 +70,17 @@ pub fn render_cells(
     height: u16,
     scale: f32,
 ) -> Vec<Vec<BrailleCell>> {
+    render_cells_range(history, width, height, 0.0, scale)
+}
+
+#[must_use]
+pub fn render_cells_range(
+    history: &History,
+    width: u16,
+    height: u16,
+    min: f32,
+    max: f32,
+) -> Vec<Vec<BrailleCell>> {
     let height = height.max(1) as usize;
     let width = width as usize;
     if width == 0 {
@@ -80,7 +91,7 @@ pub fn render_cells(
         intensity: 0.0,
     };
     let buckets = width.saturating_mul(2);
-    let samples = history.downsample_norm(buckets, scale);
+    let samples = history.downsample_norm_range(buckets, min, max);
     if samples.is_empty() {
         return vec![vec![blank; width]; height];
     }

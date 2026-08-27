@@ -55,9 +55,9 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
                 history: view.disk_history,
                 accent: theme.disk,
                 theme,
-                scale: Scale::Fixed(1.0),
-                axis: Axis::Percent,
-                ink: GraphInk::Load(view.snapshot.thermal),
+                scale: Scale::Auto { floor: 1_024.0 },
+                axis: Axis::Bytes,
+                ink: GraphInk::Flat,
             },
         );
     }

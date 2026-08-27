@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
             history: view.gpu_history,
             accent: theme.gpu,
             theme,
-            scale: Scale::Fixed(1.0),
+            scale: Scale::LOAD,
             axis: Axis::Percent,
             ink: GraphInk::Load(view.snapshot.thermal),
         },
