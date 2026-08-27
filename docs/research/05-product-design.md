@@ -134,7 +134,7 @@ Custom `BrailleHistory`. Craft bar is still “as good as btop,” with product 
 | **Throttle mark:** column where thermal ≠ nominal *or* (busy high ∧ freq slumped ∧ watts flat) | the Mac story |
 | Idle = empty. No `no_zero` heartbeat | calm |
 | No tweening | honesty |
-| Auto-scale only net/disk, labeled | no jumping CPU axis |
+| Auto-scale load (10% floor), temp (band), fan, net, disk; fixed only for MEM used-ratio | quiet series stay visible |
 | `block` / `tty` fallbacks | unreadable braille is worse than ugly |
 
 Encode `U+2800 + bits`. Do not copy btop tables.

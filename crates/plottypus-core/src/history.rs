@@ -184,6 +184,12 @@ impl History {
 
     #[must_use]
     pub fn downsample(&self, buckets: usize) -> Vec<f32> {
+        downsample_peak(&self.samples, 0, self.samples.len(), buckets)
+    }
+
+    /// Right half of `buckets` is last-value (one sample each). Left half is peak of everything older.
+    #[must_use]
+    pub fn downsample_shaped(&self, buckets: usize) -> Vec<f32> {
         if buckets == 0 || self.samples.is_empty() {
             return Vec::new();
         }
@@ -191,18 +197,11 @@ impl History {
         if len <= buckets {
             return self.samples.iter().copied().collect();
         }
-        let mut out = Vec::with_capacity(buckets);
-        for i in 0..buckets {
-            let start = i * len / buckets;
-            let end = ((i + 1) * len / buckets).max(start + 1).min(len);
-            let mut peak = 0.0_f32;
-            for j in start..end {
-                if let Some(v) = self.samples.get(j).copied() {
-                    peak = peak.max(v);
-                }
-            }
-            out.push(peak);
-        }
+        let recent = buckets / 2;
+        let older = buckets - recent;
+        let split = len - recent;
+        let mut out = downsample_peak(&self.samples, 0, split, older);
+        out.extend(self.samples.iter().skip(split).copied());
         out
     }
 
@@ -212,14 +211,21 @@ impl History {
         self.downsample_norm_range(buckets, 0.0, scale)
     }
 
-    /// Downsample then map `min..=max` onto 0..=1.
+    /// Downsample then map `min..=max` onto 0..=1. Uses shaped (not peak-only).
     #[must_use]
     pub fn downsample_norm_range(&self, buckets: usize, min: f32, max: f32) -> Vec<f32> {
         let span = (max - min).max(f32::EPSILON);
-        self.downsample(buckets)
+        self.downsample_shaped(buckets)
             .into_iter()
             .map(|v| ((v - min) / span).clamp(0.0, 1.0))
             .collect()
+    }
+
+    pub const CHEAP_CAPACITY: usize = 3600;
+
+    #[must_use]
+    pub fn cheap() -> Self {
+        Self::with_capacity(Self::CHEAP_CAPACITY)
     }
 
     #[must_use]
@@ -231,6 +237,29 @@ impl History {
     pub fn scale(&self, mode: Scale) -> f32 {
         self.range(mode).max
     }
+}
+
+fn downsample_peak(samples: &VecDeque<f32>, start: usize, end: usize, buckets: usize) -> Vec<f32> {
+    if buckets == 0 || start >= end || samples.is_empty() {
+        return Vec::new();
+    }
+    let len = end - start;
+    if len <= buckets {
+        return samples.iter().skip(start).take(len).copied().collect();
+    }
+    let mut out = Vec::with_capacity(buckets);
+    for i in 0..buckets {
+        let a = start + i * len / buckets;
+        let b = (start + ((i + 1) * len / buckets).max(i * len / buckets + 1)).min(end);
+        let mut peak = 0.0_f32;
+        for j in a..b {
+            if let Some(v) = samples.get(j).copied() {
+                peak = peak.max(v);
+            }
+        }
+        out.push(peak);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -330,5 +359,72 @@ mod tests {
         let norm = h.downsample_norm_range(3, range.min, range.max);
         assert!(norm.iter().all(|v| (0.0..=1.0).contains(v)));
         assert!(norm[1] > norm[0], "{norm:?}");
+    }
+
+    #[test]
+    fn downsample_shaped_40_col_braille_is_10s_identity() {
+        let mut h = History::with_capacity(3600);
+        for i in 0..3560 {
+            h.push(if i % 89 == 0 { 0.8 } else { 0.1 });
+        }
+        let recent: Vec<f32> = (0..40).map(|i| 0.2 + i as f32 * 0.01).collect();
+        for v in &recent {
+            h.push(*v);
+        }
+        let out = h.downsample_shaped(80);
+        assert_eq!(out.len(), 80);
+        assert_eq!(&out[40..], recent.as_slice());
+        assert!(
+            out[..40].iter().any(|v| *v > 0.7),
+            "older half must keep the 0.8 peaks: {:?}",
+            &out[..40]
+        );
+        assert!(out[..40].iter().all(|v| *v >= 0.1));
+        assert!(
+            out[40..].iter().all(|v| *v < 0.7),
+            "recent half must stay last-value, not peaked: {:?}",
+            &out[40..]
+        );
+    }
+
+    #[test]
+    fn downsample_norm_range_uses_shaped() {
+        let mut h = History::with_capacity(80);
+        for _ in 0..60 {
+            h.push(0.0);
+        }
+        let recent: Vec<f32> = (0..20).map(|i| 0.5 + i as f32 * 0.01).collect();
+        for v in &recent {
+            h.push(*v);
+        }
+        let out = h.downsample_shaped(40);
+        assert_eq!(out.len(), 40);
+        assert_eq!(&out[20..], recent.as_slice());
+        let norm = h.downsample_norm_range(40, 0.0, 1.0);
+        assert_eq!(norm.len(), 40);
+        assert!(
+            norm[..20].iter().all(|v| *v == 0.0),
+            "older zeros must not pick up the recent ramp: {:?}",
+            &norm[..20]
+        );
+        for (i, want) in recent.iter().enumerate() {
+            let got = norm[20 + i];
+            assert!(
+                (got - *want).abs() < 1e-5,
+                "norm[{}] = {got} want {want}",
+                20 + i
+            );
+        }
+    }
+
+    #[test]
+    fn cheap_capacity_is_3600() {
+        let mut h = History::cheap();
+        for i in 0..3601 {
+            h.push(i as f32);
+        }
+        assert_eq!(h.len(), 3600);
+        assert!((h.last().unwrap_or(0.0) - 3600.0).abs() < f32::EPSILON);
+        assert!((h.iter().next().unwrap_or(0.0) - 1.0).abs() < f32::EPSILON);
     }
 }

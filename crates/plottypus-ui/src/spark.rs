@@ -72,4 +72,26 @@ mod tests {
         let out = bars(&h, 3);
         assert_eq!(out, vec![0, 0, 100]);
     }
+
+    #[test]
+    fn forty_col_spark_keeps_last_twenty_identity() {
+        let mut h = History::with_capacity(80);
+        for _ in 0..60 {
+            h.push(0.0);
+        }
+        for i in 0..20 {
+            h.push(0.5 + i as f32 * 0.01);
+        }
+        let out = bars_scaled_range(&h, 40, 0.0, 1.0);
+        assert_eq!(out.len(), 40);
+        assert!(
+            out[..20].iter().all(|v| *v == 0),
+            "older zeros leaked: {:?}",
+            &out[..20]
+        );
+        for i in 0..20 {
+            let want = ((0.5 + i as f32 * 0.01) * 100.0).round() as u64;
+            assert_eq!(out[20 + i], want.max(4), "col {}", 20 + i);
+        }
+    }
 }

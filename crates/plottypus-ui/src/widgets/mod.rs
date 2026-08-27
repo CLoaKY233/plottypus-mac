@@ -4,6 +4,7 @@ mod expanded;
 mod fans;
 mod footer;
 mod gpu;
+mod grid;
 mod help;
 mod mem;
 mod net;
@@ -80,6 +81,9 @@ pub struct AppView<'a> {
     pub e_temp_history: &'a History,
     pub p_temp_history: &'a History,
     pub s_temp_history: &'a History,
+    pub e_load_history: &'a History,
+    pub p_load_history: &'a History,
+    pub s_load_history: &'a History,
     pub fan_histories: &'a [History],
     pub surface: Surface,
     pub degrade: Degrade,
@@ -142,8 +146,18 @@ impl AppView<'_> {
             plottypus_core::ClusterKind::Super => self.s_temp_history,
         }
     }
+
+    #[must_use]
+    pub fn cluster_load_history(&self, kind: plottypus_core::ClusterKind) -> &History {
+        match kind {
+            plottypus_core::ClusterKind::Efficiency => self.e_load_history,
+            plottypus_core::ClusterKind::Performance => self.p_load_history,
+            plottypus_core::ClusterKind::Super => self.s_load_history,
+        }
+    }
 }
 
+pub use expanded::hop_hit;
 pub use footer::footer_hit;
 pub use processes::filtered as filtered_processes;
 pub use processes::{DetailAction, detail_actions, detail_rect};
@@ -288,6 +302,9 @@ pub(crate) mod tests_support {
         pub e_temp: History,
         pub p_temp: History,
         pub s_temp: History,
+        pub e_load: History,
+        pub p_load: History,
+        pub s_load: History,
         pub fans: Vec<History>,
         pub proc: ProcView,
         pub surface: Surface,
@@ -346,6 +363,9 @@ pub(crate) mod tests_support {
             e_temp: History::default(),
             p_temp: History::default(),
             s_temp: History::default(),
+            e_load: History::default(),
+            p_load: History::default(),
+            s_load: History::default(),
             fans: Vec::new(),
             proc: ProcView {
                 filter: filter.to_owned(),
@@ -386,6 +406,9 @@ pub(crate) mod tests_support {
                 e_temp_history: &self.e_temp,
                 p_temp_history: &self.p_temp,
                 s_temp_history: &self.s_temp,
+                e_load_history: &self.e_load,
+                p_load_history: &self.p_load,
+                s_load_history: &self.s_load,
                 fan_histories: &self.fans,
                 surface: self.surface,
                 focus: self.focus,
@@ -615,13 +638,17 @@ mod render_tests {
         ];
         fx.snap.sensors.e_c = Some(36.0);
         fx.snap.sensors.p_c = Some(51.0);
+        fx.e_temp.push(36.0);
+        fx.p_temp.push(51.0);
+        fx.e_load.push(0.2);
+        fx.p_load.push(0.8);
         let text = paint(&fx.view(), 80, 24);
         for want in [
-            "load",
             "cpu",
-            "cpu temp",
             "efficiency",
             "performance",
+            "eff zone",
+            "perf zone",
             "E0",
             "P0",
             "36°",
@@ -652,11 +679,10 @@ mod render_tests {
             ..GpuSnapshot::default()
         });
         let text = paint(&fx.view(), 80, 24);
-        for want in [
-            "util", "power", "clock", "temp", "gpu util", "gpu temp", "12%", "51°", "461MHz",
-        ] {
+        for want in ["gpu", "gpu temp", "12%", "51°"] {
             assert!(text.contains(want), "missing {want}: {text}");
         }
+        assert!(text.contains("1.1W") || text.contains("1.1 W"), "{text}");
         assert!(!text.contains("no readings on this machine"), "{text}");
     }
 
@@ -675,7 +701,8 @@ mod render_tests {
             active: 0.4,
         }];
         let text = paint(&fx.view(), 80, 24);
-        assert!(text.contains("load"), "{text}");
+        assert!(text.contains("cpu"), "{text}");
+        assert!(text.contains("performance"), "{text}");
         assert!(!text.contains("power"), "{text}");
         assert!(!text.contains("clock"), "{text}");
         assert!(text.contains("P0"), "{text}");
@@ -692,8 +719,8 @@ mod render_tests {
         });
         fx.snap.soc.gpu_cores = 0;
         let text = paint(&fx.view(), 80, 24);
-        assert!(text.contains("util"), "{text}");
-        assert!(text.contains("gpu util"), "{text}");
+        assert!(text.contains("gpu"), "{text}");
+        assert!(text.contains("22%"), "{text}");
         assert!(!text.contains("power"), "{text}");
         assert!(!text.contains("clock"), "{text}");
         assert!(!text.contains("gpu temp"), "{text}");
@@ -716,10 +743,9 @@ mod render_tests {
         let text = paint(&fx.view(), 80, 24);
         assert!(text.contains("volumes"), "{text}");
         assert!(text.contains("Macintosh HD"), "{text}");
-        assert!(text.contains("activity"), "{text}");
-        assert!(text.contains("read io"), "{text}");
-        assert!(text.contains("write io"), "{text}");
-        assert!(text.contains("2M/s"), "{text}");
+        assert!(text.contains("read"), "{text}");
+        assert!(text.contains("write"), "{text}");
+        assert!(text.contains("2.0M/s") || text.contains("2M/s"), "{text}");
         assert!(!text.contains("primary volume"), "{text}");
     }
 
@@ -742,6 +768,10 @@ mod render_tests {
             ],
         };
         fx.snap.sensors.cpu_c = Some(42.0);
+        fx.snap.sensors.p_c = Some(51.0);
+        fx.snap.sensors.s_c = Some(62.0);
+        fx.p_temp.push(51.0);
+        fx.s_temp.push(62.0);
         fx.fans = vec![{
             let mut h = History::default();
             for rpm in [800.0, 1000.0, 1200.0] {
@@ -756,7 +786,91 @@ mod render_tests {
         assert!(text.contains("Fan 2"), "{text}");
         assert!(text.contains("1200 rpm"), "{text}");
         assert!(text.contains("1850 rpm"), "{text}");
-        assert!(text.contains("cpu temp"), "{text}");
+        assert!(text.contains("perf zone"), "{text}");
+        assert!(text.contains("super zone"), "{text}");
+        assert!(text.contains("51°"), "{text}");
+        assert!(text.contains("62°"), "{text}");
+        assert!(!text.contains("E0 36°"), "{text}");
+    }
+
+    #[test]
+    fn compact_sens_sparks_at_80x24_minimal() {
+        let mut fx = fixture("");
+        fx.snap.sensors.e_c = Some(48.0);
+        fx.snap.sensors.p_c = Some(62.0);
+        fx.snap.sensors.s_c = Some(71.0);
+        fx.cpu_temp.push(40.0);
+        fx.cpu_temp.push(71.0);
+        let view = fx.view();
+        let layout = crate::layout::plan(
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+            Surface::Work,
+            view.flags(),
+        );
+        assert_eq!(layout.degrade, crate::layout::Degrade::Minimal);
+        assert!(layout.fans.is_some());
+        let text = paint(&view, 80, 24);
+        assert!(text.contains("48°"), "{text}");
+        assert!(text.contains("62°"), "{text}");
+        assert!(text.contains('e'), "{text}");
+        assert!(text.contains('p'), "{text}");
+        let has_spark = text.chars().any(|c| ('\u{2801}'..='\u{28FF}').contains(&c));
+        assert!(has_spark, "SENS at 80x24 Minimal must keep a spark: {text}");
+    }
+
+    #[test]
+    fn glance_sens_is_numbers_not_spark() {
+        let mut fx = fixture("");
+        fx.surface = Surface::Glance;
+        fx.snap.sensors.e_c = Some(48.0);
+        fx.snap.sensors.p_c = Some(62.0);
+        fx.cpu_temp.push(48.0);
+        fx.cpu_temp.push(62.0);
+        let text = paint(&fx.view(), 80, 20);
+        assert!(text.contains("48°") || text.contains("e 48"), "{text}");
+    }
+
+    #[test]
+    fn expand_sens_shows_cpu_gpu_hops() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Fans);
+        fx.snap.gpu = Some(GpuSnapshot {
+            scaled: 0.31,
+            ..GpuSnapshot::default()
+        });
+        fx.snap.cpu.scaled = 0.44;
+        fx.snap.sensors.p_c = Some(51.0);
+        fx.p_temp.push(51.0);
+        let text = paint(&fx.view(), 100, 30);
+        assert!(text.contains("cpu"), "{text}");
+        assert!(text.contains("gpu"), "{text}");
+        assert!(text.contains('→'), "{text}");
+        assert!(text.contains("44%") || text.contains("31%"), "{text}");
+    }
+
+    #[test]
+    fn hop_hit_on_related_cell() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        fx.snap.gpu = Some(GpuSnapshot {
+            scaled: 0.2,
+            ..GpuSnapshot::default()
+        });
+        fx.snap.fans = FanSnapshot {
+            fans: vec![FanMetric {
+                name: String::from("Fan 1"),
+                rpm: 1000,
+                max_rpm: 6000,
+            }],
+        };
+        let view = fx.view();
+        let area = ratatui::layout::Rect::new(0, 0, 80, 23);
+        let hit = (0..area.height).find_map(|y| {
+            (0..area.width).find_map(|x| {
+                crate::widgets::hop_hit(area, &view, x, y).filter(|p| *p == Panel::Gpu)
+            })
+        });
+        assert_eq!(hit, Some(Panel::Gpu), "a gpu hop cell must exist");
     }
 
     #[test]

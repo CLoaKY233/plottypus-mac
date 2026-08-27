@@ -557,11 +557,13 @@ mod tests {
     }
 
     #[test]
-    fn expanded_views_never_degrade() {
+    fn expanded_still_fills_the_body() {
         let mut fs = flags();
         fs.expanded = Some(Panel::Cpu);
-        let planned = plan(Rect::new(0, 0, 70, 20), Surface::Work, fs);
-        assert_eq!(planned.degrade, Degrade::Full);
+        let planned = plan(Rect::new(0, 0, 80, 24), Surface::Work, fs);
+        let cpu = planned.cpu.unwrap_or_default();
+        assert_eq!(cpu.width, 80);
+        assert_eq!(cpu.height, 23);
     }
 
     #[test]

@@ -1,14 +1,44 @@
 use plottypus_core::SensorsSnapshot;
 
-pub(crate) fn sample_temps() -> SensorsSnapshot {
+pub(crate) struct HidClient {
     #[cfg(target_os = "macos")]
-    {
-        macos::sample()
+    ptr: usize,
+}
+
+impl HidClient {
+    pub(crate) fn new() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self { ptr: macos::open() }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self {}
+        }
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        SensorsSnapshot::default()
+
+    pub(crate) fn sample(&self) -> SensorsSnapshot {
+        #[cfg(target_os = "macos")]
+        {
+            macos::sample(self.ptr)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            SensorsSnapshot::default()
+        }
     }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for HidClient {
+    fn drop(&mut self) {
+        macos::close(self.ptr);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn sample_temps() -> SensorsSnapshot {
+    HidClient::new().sample()
 }
 
 #[cfg(target_os = "macos")]
@@ -86,20 +116,34 @@ mod macos {
     const HID_TEMP_EVENT: i64 = 15;
     const HID_TEMP_FIELD: i32 = 15 << 16;
 
-    pub(super) fn sample() -> SensorsSnapshot {
+    pub(super) fn open() -> usize {
         let client = unsafe { IOHIDEventSystemClientCreate(ptr::null()) };
         if client.is_null() {
+            return 0;
+        }
+        if let Some(matching) = matching_dict() {
+            unsafe { IOHIDEventSystemClientSetMatching(client, matching) };
+            unsafe { CFRelease(matching.cast()) };
+        }
+        client as usize
+    }
+
+    pub(super) fn close(ptr: usize) {
+        if ptr != 0 {
+            unsafe {
+                // SAFETY: ptr is an IOHIDEventSystemClient created in open().
+                CFRelease(ptr as CfTypeRef);
+            }
+        }
+    }
+
+    pub(super) fn sample(ptr: usize) -> SensorsSnapshot {
+        if ptr == 0 {
             return SensorsSnapshot::default();
         }
-        let Some(matching) = matching_dict() else {
-            unsafe { CFRelease(client.cast()) };
-            return SensorsSnapshot::default();
-        };
-        unsafe { IOHIDEventSystemClientSetMatching(client, matching) };
-        unsafe { CFRelease(matching.cast()) };
+        let client = ptr as *mut c_void;
         let services = unsafe { IOHIDEventSystemClientCopyServices(client) };
         if services.is_null() {
-            unsafe { CFRelease(client.cast()) };
             return SensorsSnapshot::default();
         }
         let count = unsafe { CFArrayGetCount(services) };
@@ -117,7 +161,6 @@ mod macos {
         }
         unsafe {
             CFRelease(services);
-            CFRelease(client.cast());
         }
         crate::zones::snapshot_from_named(&named, crate::zones::Source::Hid)
     }

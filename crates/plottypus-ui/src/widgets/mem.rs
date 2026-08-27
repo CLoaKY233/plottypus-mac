@@ -64,7 +64,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
 
     let ratio = mem_ratio(mem.used_bytes, mem.total_bytes);
     render_fill_bar(frame, rows[0], ratio, theme.mem);
-    if rows.len() > 1 && !minimal {
+    if rows.len() > 1 {
         render_scaled_graph(
             frame,
             rows[1],

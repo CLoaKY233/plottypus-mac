@@ -3,9 +3,10 @@ use std::time::Duration;
 
 use crate::surface::Surface;
 
-pub const INTERVAL_FAST: Duration = Duration::from_millis(500);
-pub const INTERVAL_DEFAULT: Duration = Duration::from_secs(1);
-pub const INTERVAL_SLOW: Duration = Duration::from_secs(2);
+pub const INTERVAL_FAST: Duration = Duration::from_millis(250);
+pub const INTERVAL_MID: Duration = Duration::from_millis(500);
+pub const INTERVAL_SLOW: Duration = Duration::from_secs(1);
+pub const INTERVAL_DEFAULT: Duration = INTERVAL_FAST;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProcSort {
@@ -75,12 +76,10 @@ impl Default for Config {
 impl Config {
     #[must_use]
     pub fn cycle_interval(&self) -> Duration {
-        if self.interval <= INTERVAL_FAST {
-            INTERVAL_DEFAULT
-        } else if self.interval <= INTERVAL_DEFAULT {
-            INTERVAL_SLOW
-        } else {
-            INTERVAL_FAST
+        match self.interval.as_millis() {
+            250 => INTERVAL_MID,
+            500 => INTERVAL_SLOW,
+            _ => INTERVAL_FAST,
         }
     }
 
@@ -118,9 +117,9 @@ impl Config {
             "interval_ms" => {
                 if let Ok(ms) = value.parse::<u64>() {
                     match ms {
-                        500 => self.interval = INTERVAL_FAST,
-                        1000 => self.interval = INTERVAL_DEFAULT,
-                        2000 => self.interval = INTERVAL_SLOW,
+                        250 => self.interval = INTERVAL_FAST,
+                        500 => self.interval = INTERVAL_MID,
+                        1000 | 2000 => self.interval = INTERVAL_SLOW,
                         _ => {}
                     }
                 }
@@ -211,15 +210,32 @@ mod tests {
     }
 
     #[test]
-    fn interval_cycles_three_steps() {
+    fn interval_cycles_250_500_1000() {
         let cfg = Config::default();
-        assert_eq!(cfg.interval, INTERVAL_DEFAULT);
-        let next = cfg.cycle_interval();
-        assert_eq!(next, INTERVAL_SLOW);
-        let cfg = cfg.with_interval(next);
+        assert_eq!(cfg.interval, INTERVAL_FAST);
+        assert_eq!(cfg.cycle_interval(), INTERVAL_MID);
+        let cfg = cfg.with_interval(INTERVAL_MID);
+        assert_eq!(cfg.cycle_interval(), INTERVAL_SLOW);
+        let cfg = cfg.with_interval(INTERVAL_SLOW);
         assert_eq!(cfg.cycle_interval(), INTERVAL_FAST);
-        let cfg = cfg.with_interval(INTERVAL_FAST);
-        assert_eq!(cfg.cycle_interval(), INTERVAL_DEFAULT);
+        let stuck = Config::default().with_interval(INTERVAL_FAST);
+        assert_ne!(stuck.cycle_interval(), INTERVAL_FAST);
+    }
+
+    #[test]
+    fn apply_interval_table() {
+        let path = tmp("interval-table");
+        std::fs::write(&path, "interval_ms = 250\n").unwrap();
+        assert_eq!(Config::load(&path).interval, INTERVAL_FAST);
+        std::fs::write(&path, "interval_ms = 500\n").unwrap();
+        assert_eq!(Config::load(&path).interval, INTERVAL_MID);
+        std::fs::write(&path, "interval_ms = 1000\n").unwrap();
+        assert_eq!(Config::load(&path).interval, INTERVAL_SLOW);
+        std::fs::write(&path, "interval_ms = 2000\n").unwrap();
+        assert_eq!(Config::load(&path).interval, INTERVAL_SLOW);
+        std::fs::write(&path, "interval_ms = 99999\n").unwrap();
+        assert_eq!(Config::load(&path).interval, INTERVAL_DEFAULT);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

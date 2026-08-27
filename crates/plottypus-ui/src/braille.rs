@@ -263,4 +263,30 @@ mod tests {
         let rows = render_cells(&history, 1, 2, scale);
         assert_ne!(rows[0][0].glyph, '\u{2800}');
     }
+
+    #[test]
+    fn forty_col_braille_recent_is_last_value_not_peak() {
+        let mut history = History::with_capacity(3600);
+        for _ in 0..3555 {
+            history.push(0.0);
+        }
+        for _ in 0..5 {
+            history.push(1.0);
+        }
+        for _ in 0..40 {
+            history.push(0.2);
+        }
+        let rows = render_cells(&history, 40, 1, 1.0);
+        assert_eq!(rows[0].len(), 40);
+        let last = rows[0][39];
+        assert!(
+            last.intensity < 0.3,
+            "rightmost cell must be the 0.2 tail, not the 1.0 peak just behind it: {}",
+            last.intensity
+        );
+        assert!(
+            rows[0].iter().any(|c| c.intensity > 0.9),
+            "older 1.0 peak must still appear on the left"
+        );
+    }
 }

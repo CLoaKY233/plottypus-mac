@@ -7,7 +7,7 @@ use plottypus_core::{
 use plottypus_metrics::{Signal, send_signal};
 use plottypus_ui::{
     AppView, DetailAction, Focus, Hit, LayoutFlags, Panel, ProcView, detail_actions, detail_rect,
-    filtered_processes, footer_hit, hit_test, plan, render_app,
+    filtered_processes, footer_hit, hit_test, hop_hit, plan, render_app,
 };
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -86,6 +86,9 @@ struct App {
     e_temp_history: History,
     p_temp_history: History,
     s_temp_history: History,
+    e_load_history: History,
+    p_load_history: History,
+    s_load_history: History,
     fan_histories: Vec<History>,
     surface: Surface,
     focus: Focus,
@@ -117,19 +120,22 @@ impl App {
             config,
             worker,
             snapshot: Snapshot::empty(),
-            cpu_history: History::default(),
-            gpu_history: History::default(),
-            mem_history: History::default(),
-            net_rx_history: History::default(),
-            net_tx_history: History::default(),
-            disk_history: History::default(),
-            disk_read_history: History::default(),
-            disk_write_history: History::default(),
+            cpu_history: History::cheap(),
+            gpu_history: History::cheap(),
+            mem_history: History::cheap(),
+            net_rx_history: History::cheap(),
+            net_tx_history: History::cheap(),
+            disk_history: History::cheap(),
+            disk_read_history: History::cheap(),
+            disk_write_history: History::cheap(),
             cpu_temp_history: History::default(),
             gpu_temp_history: History::default(),
             e_temp_history: History::default(),
             p_temp_history: History::default(),
             s_temp_history: History::default(),
+            e_load_history: History::cheap(),
+            p_load_history: History::cheap(),
+            s_load_history: History::cheap(),
             fan_histories: Vec::new(),
             surface: Surface::Work,
             focus: Focus::Processes,
@@ -224,18 +230,23 @@ impl App {
         self.disk_history.push(disk_io as f32);
         self.disk_read_history.push(snap.disk.read_bps as f32);
         self.disk_write_history.push(snap.disk.write_bps as f32);
-        push_fans(&mut self.fan_histories, &snap.fans.fans);
-        push_temp(
-            &mut self.cpu_temp_history,
-            snap.cpu.temp_c.or(snap.sensors.best_cpu_c()),
-        );
-        push_temp(
-            &mut self.gpu_temp_history,
-            snap.gpu.and_then(|g| g.temp_c).or(snap.sensors.gpu_c),
-        );
-        push_temp(&mut self.e_temp_history, snap.sensors.e_c);
-        push_temp(&mut self.p_temp_history, snap.sensors.p_c);
-        push_temp(&mut self.s_temp_history, snap.sensors.s_c);
+        push_cluster(&mut self.e_load_history, snap.cpu.e_cluster.as_ref());
+        push_cluster(&mut self.p_load_history, snap.cpu.p_cluster.as_ref());
+        push_cluster(&mut self.s_load_history, snap.cpu.s_cluster.as_ref());
+        if snap.sampled.sensors {
+            push_fans(&mut self.fan_histories, &snap.fans.fans);
+            push_temp(
+                &mut self.cpu_temp_history,
+                snap.cpu.temp_c.or(snap.sensors.best_cpu_c()),
+            );
+            push_temp(
+                &mut self.gpu_temp_history,
+                snap.gpu.and_then(|g| g.temp_c).or(snap.sensors.gpu_c),
+            );
+            push_temp(&mut self.e_temp_history, snap.sensors.e_c);
+            push_temp(&mut self.p_temp_history, snap.sensors.p_c);
+            push_temp(&mut self.s_temp_history, snap.sensors.s_c);
+        }
         self.ready = true;
         self.last_tick = Instant::now();
         self.proc.selected_pid = keep_pid;
@@ -282,6 +293,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_normal(&mut self, event: Event) {
         match event {
             Event::Settings => self.settings = true,
@@ -298,8 +310,20 @@ impl App {
                     self.expand_focus();
                 }
             }
-            Event::NextPanel => self.cycle_focus(1),
-            Event::PrevPanel => self.cycle_focus(-1),
+            Event::NextPanel => {
+                if self.expanded.is_some() {
+                    self.hop_related(1);
+                } else {
+                    self.cycle_focus(1);
+                }
+            }
+            Event::PrevPanel => {
+                if self.expanded.is_some() {
+                    self.hop_related(-1);
+                } else {
+                    self.cycle_focus(-1);
+                }
+            }
             Event::Search => {
                 self.searching = !self.searching;
                 self.focus = if self.searching {
@@ -465,6 +489,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn on_click(&mut self, col: u16, row: u16) {
         let flags = self.layout_flags();
         let planned = plan(self.last_area, self.effective_surface(), flags);
@@ -517,6 +542,14 @@ impl App {
                 return;
             }
             self.detail_pid = None;
+            return;
+        }
+        if let Some(panel) = self.expanded
+            && let Some(area) = planned.panel(panel)
+            && let Some(target) = hop_hit(area, &self.view(), col, row)
+        {
+            self.expanded = Some(target);
+            self.focus = Focus::from_panel(target);
             return;
         }
         match hit_test(self.last_area, self.effective_surface(), flags, col, row) {
@@ -592,6 +625,33 @@ impl App {
         self.expanded = Some(panel);
         if panel != Panel::Processes {
             self.searching = false;
+        }
+    }
+
+    fn hop_related(&mut self, dir: i32) {
+        let Some(current) = self.expanded else {
+            return;
+        };
+        let flags = self.layout_flags();
+        let ring: Vec<Panel> = hop_ring(current)
+            .iter()
+            .copied()
+            .filter(|p| hop_ready(flags, *p))
+            .collect();
+        if ring.len() < 2 {
+            return;
+        }
+        let Some(i) = ring.iter().position(|p| *p == current) else {
+            return;
+        };
+        let next = if dir < 0 {
+            i.checked_sub(1).unwrap_or(ring.len() - 1)
+        } else {
+            (i + 1) % ring.len()
+        };
+        if let Some(&panel) = ring.get(next) {
+            self.expanded = Some(panel);
+            self.focus = Focus::from_panel(panel);
         }
     }
 
@@ -751,6 +811,9 @@ impl App {
             e_temp_history: &self.e_temp_history,
             p_temp_history: &self.p_temp_history,
             s_temp_history: &self.s_temp_history,
+            e_load_history: &self.e_load_history,
+            p_load_history: &self.p_load_history,
+            s_load_history: &self.s_load_history,
             fan_histories: &self.fan_histories,
             surface: self.effective_surface(),
             degrade: plottypus_ui::Degrade::Full,
@@ -799,6 +862,32 @@ fn push_temp(history: &mut History, temp: Option<f32>) {
     }
 }
 
+fn push_cluster(history: &mut History, cluster: Option<&plottypus_core::Cluster>) {
+    if let Some(cluster) = cluster {
+        history.push(cluster.scaled);
+    }
+}
+
+fn hop_ring(panel: Panel) -> &'static [Panel] {
+    match panel {
+        Panel::Cpu | Panel::Gpu | Panel::Fans => &[Panel::Cpu, Panel::Gpu, Panel::Fans],
+        Panel::Net | Panel::Disk => &[Panel::Net, Panel::Disk],
+        Panel::Mem | Panel::Processes => &[Panel::Mem, Panel::Processes],
+    }
+}
+
+fn hop_ready(flags: LayoutFlags, panel: Panel) -> bool {
+    if !flags.visible(panel) {
+        return false;
+    }
+    match panel {
+        Panel::Gpu => flags.has_gpu,
+        Panel::Fans => flags.has_fans,
+        Panel::Disk => flags.has_disk,
+        _ => true,
+    }
+}
+
 fn push_fans(histories: &mut Vec<History>, fans: &[plottypus_core::FanMetric]) {
     let n = fans.len().min(4);
     while histories.len() < n {
@@ -833,6 +922,32 @@ mod tests {
         app.snapshot.sensors.cpu_c = Some(42.0);
         assert!(app.layout_flags().has_fans);
         assert!(app.view().flags().has_fans);
+    }
+
+    #[test]
+    fn hop_related_sets_expanded_and_focus() {
+        let mut app = App::new().unwrap();
+        app.snapshot.gpu = Some(plottypus_core::GpuSnapshot {
+            scaled: 0.2,
+            ..plottypus_core::GpuSnapshot::default()
+        });
+        app.snapshot.sensors.cpu_c = Some(40.0);
+        app.expanded = Some(Panel::Cpu);
+        app.focus = Focus::Cpu;
+        app.hop_related(1);
+        assert_eq!(app.expanded, Some(Panel::Gpu));
+        assert_eq!(app.focus, Focus::Gpu);
+    }
+
+    #[test]
+    fn hop_related_one_member_is_noop() {
+        let mut app = App::new().unwrap();
+        app.config.show_disk = false;
+        app.expanded = Some(Panel::Net);
+        app.focus = Focus::Net;
+        app.hop_related(1);
+        assert_eq!(app.expanded, Some(Panel::Net));
+        assert_eq!(app.focus, Focus::Net);
     }
 
     #[test]
@@ -888,6 +1003,37 @@ mod tests {
         assert_eq!(app.cpu_temp_history.last(), Some(42.0));
         assert_eq!(app.gpu_temp_history.last(), Some(51.0));
         assert_eq!(app.gpu_history.last(), Some(0.25));
+    }
+
+    #[test]
+    fn stale_sensor_tick_does_not_extend_temp_history() {
+        let mut app = App::new().unwrap();
+        let before = app.cpu_temp_history.len();
+        let mut snap = app.snapshot.clone();
+        snap.sampled.sensors = false;
+        snap.cpu.temp_c = Some(88.0);
+        snap.sensors.cpu_c = Some(88.0);
+        snap.sensors.e_c = Some(40.0);
+        app.apply_snapshot(snap);
+        assert_eq!(app.cpu_temp_history.len(), before);
+        assert_ne!(app.cpu_temp_history.last(), Some(88.0));
+    }
+
+    #[test]
+    fn cluster_load_history_skips_missing_family() {
+        let mut app = App::new().unwrap();
+        let mut snap = app.snapshot.clone();
+        snap.cpu.s_cluster = Some(plottypus_core::Cluster {
+            kind: plottypus_core::ClusterKind::Super,
+            scaled: 0.81,
+            active: 0.81,
+            freq_mhz: 0,
+        });
+        snap.cpu.e_cluster = None;
+        let e_len = app.e_load_history.len();
+        app.apply_snapshot(snap);
+        assert_eq!(app.s_load_history.last(), Some(0.81));
+        assert_eq!(app.e_load_history.len(), e_len);
     }
 
     #[test]

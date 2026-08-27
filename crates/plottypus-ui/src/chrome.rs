@@ -43,9 +43,31 @@ pub fn panel_block<'a>(
 
 /// Titled rounded cell used by expanded grids and the process dossier.
 pub fn cell(frame: &mut Frame, area: Rect, title: &str, theme: &Theme) -> Rect {
+    cell_titled(frame, area, title, None, false, theme)
+}
+
+pub fn cell_titled(
+    frame: &mut Frame,
+    area: Rect,
+    label: &str,
+    value: Option<&str>,
+    hop: bool,
+    theme: &Theme,
+) -> Rect {
+    let mut spans = vec![Span::styled(format!(" {label}"), theme.dim())];
+    if let Some(value) = value {
+        push_token(
+            &mut spans,
+            value.to_owned(),
+            theme.title().add_modifier(ratatui::style::Modifier::BOLD),
+        );
+    }
+    if hop {
+        push_token(&mut spans, String::from("→"), theme.dim());
+    }
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title(Line::from(Span::styled(format!(" {title}"), theme.dim())))
+        .title(Line::from(spans))
         .border_style(theme.border(false));
     let inner = block.inner(area);
     frame.render_widget(block, area);

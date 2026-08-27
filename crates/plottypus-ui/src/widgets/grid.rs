@@ -1,0 +1,368 @@
+use ratatui::layout::{Constraint, Layout, Rect};
+
+use crate::layout::Panel;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellKind {
+    Graph,
+    Spark,
+    Cluster,
+    List,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CellTitle {
+    pub label: &'static str,
+    pub value: Option<String>,
+    pub hop: Option<Panel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CellSpec {
+    pub id: u8,
+    pub kind: CellKind,
+    pub title: CellTitle,
+    pub min: (u16, u16),
+    pub weight: u16,
+    pub present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Band {
+    pub min_height: u16,
+    pub grow_to: Option<u16>,
+    pub cells: Vec<CellSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Placed {
+    pub id: u8,
+    pub kind: CellKind,
+    pub rect: Rect,
+    pub hop: Option<Panel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pack {
+    pub cells: Vec<Placed>,
+}
+
+impl Pack {
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn get(&self, id: u8) -> Option<Placed> {
+        self.cells.iter().copied().find(|c| c.id == id)
+    }
+
+    #[must_use]
+    pub fn hop_at(&self, col: u16, row: u16) -> Option<Panel> {
+        self.cells.iter().find_map(|c| {
+            if rect_contains(c.rect, col, row) {
+                c.hop
+            } else {
+                None
+            }
+        })
+    }
+}
+
+fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
+    col >= rect.x
+        && col < rect.x.saturating_add(rect.width)
+        && row >= rect.y
+        && row < rect.y.saturating_add(rect.height)
+}
+
+#[must_use]
+pub fn pack(area: Rect, bands: &[Band]) -> Pack {
+    if area.width == 0 || area.height == 0 {
+        return Pack { cells: Vec::new() };
+    }
+    let mut live: Vec<Band> = bands
+        .iter()
+        .cloned()
+        .map(|mut band| {
+            band.cells.retain(|c| c.present);
+            band
+        })
+        .filter(|band| !band.cells.is_empty())
+        .collect();
+
+    while live.len() > 1 {
+        let sum: u16 = live.iter().map(|b| b.min_height).sum();
+        if sum <= area.height {
+            break;
+        }
+        live.pop();
+    }
+
+    let mut heights: Vec<u16> = live.iter().map(|b| b.min_height.min(area.height)).collect();
+    let used: u16 = heights.iter().copied().sum();
+    let mut leftover = area.height.saturating_sub(used);
+
+    for (i, band) in live.iter().enumerate() {
+        if leftover == 0 {
+            break;
+        }
+        if let Some(cap) = band.grow_to {
+            let room = cap.saturating_sub(heights[i]);
+            let give = room.min(leftover);
+            heights[i] = heights[i].saturating_add(give);
+            leftover = leftover.saturating_sub(give);
+        }
+    }
+    if leftover > 0 {
+        let target = live
+            .iter()
+            .position(|b| b.cells.iter().any(|c| c.kind == CellKind::Graph))
+            .or(Some(0));
+        if let Some(i) = target
+            && let Some(h) = heights.get_mut(i)
+        {
+            *h = h.saturating_add(leftover);
+        }
+    }
+
+    let mut y = area.y;
+    let mut cells = Vec::new();
+    for (band, height) in live.iter().zip(heights) {
+        let band_rect = Rect {
+            x: area.x,
+            y,
+            width: area.width,
+            height,
+        };
+        y = y.saturating_add(height);
+        place_band(&mut cells, band, band_rect);
+    }
+    Pack { cells }
+}
+
+fn place_band(out: &mut Vec<Placed>, band: &Band, rect: Rect) {
+    let mut cells: Vec<&CellSpec> = band.cells.iter().collect();
+    if cells.is_empty() || rect.height == 0 || rect.width == 0 {
+        return;
+    }
+    loop {
+        let splits = split_fill(rect, &cells);
+        let wide_enough = cells.len() == 1
+            || cells
+                .iter()
+                .zip(splits.iter())
+                .all(|(c, r)| r.width >= c.min.0);
+        if wide_enough {
+            for (spec, slot) in cells.iter().zip(splits) {
+                let Some(kind) = resolve_kind(spec.kind, slot.height) else {
+                    continue;
+                };
+                out.push(Placed {
+                    id: spec.id,
+                    kind,
+                    rect: slot,
+                    hop: spec.title.hop,
+                });
+            }
+            return;
+        }
+        if cells.len() <= 1 {
+            return;
+        }
+        cells.pop();
+    }
+}
+
+fn split_fill(area: Rect, cells: &[&CellSpec]) -> Vec<Rect> {
+    if cells.is_empty() {
+        return Vec::new();
+    }
+    if cells.len() == 1 {
+        return vec![area];
+    }
+    let constraints: Vec<Constraint> = cells
+        .iter()
+        .map(|c| Constraint::Fill(c.weight.max(1)))
+        .collect();
+    Layout::horizontal(constraints).split(area).to_vec()
+}
+
+fn resolve_kind(kind: CellKind, height: u16) -> Option<CellKind> {
+    match kind {
+        CellKind::Graph if height >= 5 => Some(CellKind::Graph),
+        CellKind::Graph | CellKind::Spark if height >= 3 => Some(CellKind::Spark),
+        CellKind::Cluster if height >= 4 => Some(CellKind::Cluster),
+        CellKind::List if height >= 3 => Some(CellKind::List),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn title(label: &'static str) -> CellTitle {
+        CellTitle {
+            label,
+            value: None,
+            hop: None,
+        }
+    }
+
+    fn graph(id: u8, label: &'static str) -> CellSpec {
+        CellSpec {
+            id,
+            kind: CellKind::Graph,
+            title: title(label),
+            min: (16, 5),
+            weight: 1,
+            present: true,
+        }
+    }
+
+    fn spark(id: u8, label: &'static str, hop: Panel) -> CellSpec {
+        CellSpec {
+            id,
+            kind: CellKind::Spark,
+            title: CellTitle {
+                label,
+                value: None,
+                hop: Some(hop),
+            },
+            min: (12, 3),
+            weight: 1,
+            present: true,
+        }
+    }
+
+    fn cluster(id: u8, label: &'static str) -> CellSpec {
+        CellSpec {
+            id,
+            kind: CellKind::Cluster,
+            title: title(label),
+            min: (14, 5),
+            weight: 1,
+            present: true,
+        }
+    }
+
+    fn cpu_bands_hops(hops: bool) -> Vec<Band> {
+        vec![
+            Band {
+                min_height: 5,
+                grow_to: None,
+                cells: vec![graph(0, "cpu"), graph(1, "super"), graph(2, "perf")],
+            },
+            Band {
+                min_height: 5,
+                grow_to: None,
+                cells: vec![
+                    graph(10, "super zone"),
+                    graph(11, "perf zone"),
+                    graph(13, "package"),
+                ],
+            },
+            Band {
+                min_height: 3,
+                grow_to: None,
+                cells: vec![
+                    CellSpec {
+                        present: hops,
+                        ..spark(20, "gpu", Panel::Gpu)
+                    },
+                    CellSpec {
+                        present: hops,
+                        ..spark(21, "fan", Panel::Fans)
+                    },
+                ],
+            },
+            Band {
+                min_height: 5,
+                grow_to: Some(8),
+                cells: vec![cluster(30, "super"), cluster(31, "perf")],
+            },
+        ]
+    }
+
+    #[test]
+    fn pack_cpu_80x23_reference() {
+        let area = Rect::new(0, 0, 78, 21);
+        let pack = pack(area, &cpu_bands_hops(true));
+        let cpu = pack.get(0).expect("cpu");
+        let super_g = pack.get(1).expect("super");
+        let perf_g = pack.get(2).expect("perf");
+        assert_eq!(cpu.kind, CellKind::Graph);
+        assert_eq!(cpu.rect, Rect::new(0, 0, 26, 5));
+        assert_eq!(super_g.rect, Rect::new(26, 0, 26, 5));
+        assert_eq!(perf_g.rect, Rect::new(52, 0, 26, 5));
+
+        let zone = pack.get(10).expect("super zone");
+        assert_eq!(zone.rect, Rect::new(0, 5, 26, 5));
+        assert_eq!(
+            pack.get(11).expect("perf zone").rect,
+            Rect::new(26, 5, 26, 5)
+        );
+        assert_eq!(pack.get(13).expect("package").rect, Rect::new(52, 5, 26, 5));
+
+        let gpu = pack.get(20).expect("gpu hop");
+        let fan = pack.get(21).expect("fan hop");
+        assert_eq!(gpu.kind, CellKind::Spark);
+        assert_eq!(gpu.rect, Rect::new(0, 10, 39, 3));
+        assert_eq!(fan.rect, Rect::new(39, 10, 39, 3));
+        assert_eq!(gpu.hop, Some(Panel::Gpu));
+
+        let strip = pack.get(30).expect("super strip");
+        assert_eq!(strip.kind, CellKind::Cluster);
+        assert_eq!(strip.rect, Rect::new(0, 13, 39, 8));
+        assert_eq!(
+            pack.get(31).expect("perf strip").rect,
+            Rect::new(39, 13, 39, 8)
+        );
+        assert_eq!(pack.cells.len(), 10);
+    }
+
+    #[test]
+    fn pack_cpu_80x23_without_hops_grows_usage() {
+        let area = Rect::new(0, 0, 78, 21);
+        let pack = pack(area, &cpu_bands_hops(false));
+        assert!(pack.get(20).is_none());
+        let cpu = pack.get(0).expect("cpu");
+        assert_eq!(cpu.rect.height, 8);
+        assert_eq!(pack.get(30).expect("strip").rect.height, 8);
+    }
+
+    #[test]
+    fn pack_drops_tail_band_when_short() {
+        let area = Rect::new(0, 0, 58, 13);
+        let pack = pack(area, &cpu_bands_hops(true));
+        assert!(pack.get(30).is_none());
+        assert_eq!(pack.get(0).expect("cpu").kind, CellKind::Graph);
+        assert_eq!(pack.get(20).expect("hop").kind, CellKind::Spark);
+    }
+
+    #[test]
+    fn pack_omits_absent_cells() {
+        let bands = [Band {
+            min_height: 5,
+            grow_to: None,
+            cells: vec![
+                graph(0, "cpu"),
+                CellSpec {
+                    present: false,
+                    ..graph(3, "eff")
+                },
+            ],
+        }];
+        let pack = pack(Rect::new(0, 0, 40, 5), &bands);
+        assert!(pack.get(0).is_some());
+        assert!(pack.get(3).is_none());
+        assert_eq!(pack.get(0).expect("cpu").rect.width, 40);
+    }
+
+    #[test]
+    fn hop_at_hits_spark_rect() {
+        let pack = pack(Rect::new(0, 0, 78, 21), &cpu_bands_hops(true));
+        assert_eq!(pack.hop_at(1, 11), Some(Panel::Gpu));
+        assert_eq!(pack.hop_at(50, 11), Some(Panel::Fans));
+        assert_eq!(pack.hop_at(1, 1), None);
+    }
+}

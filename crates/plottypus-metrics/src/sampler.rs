@@ -1,13 +1,20 @@
+use std::time::{Duration, Instant};
+
 use plottypus_core::{
-    Cluster, ClusterKind, CoreSample, CpuSnapshot, Result, SensorsSnapshot, Snapshot, SocInfo,
+    Cluster, ClusterKind, CoreSample, CpuSnapshot, FanSnapshot, Process, Result, Sampled,
+    SensorsSnapshot, Snapshot, SocInfo, Thermal,
 };
 
 use crate::cpu::CpuCollector;
 use crate::disk::DiskCollector;
 use crate::fan::FanCollector;
+use crate::gpu::GpuCollector;
 use crate::net::NetCollector;
 use crate::process::ProcessCollector;
-use crate::{gpu, memory, soc, thermal};
+use crate::{memory, soc, thermal};
+
+const PROCS_EVERY: Duration = Duration::from_secs(1);
+const SENSORS_EVERY: Duration = Duration::from_secs(2);
 
 fn fill_missing_temps(snap: &mut Snapshot) {
     if snap.cpu.temp_c.is_none() {
@@ -70,6 +77,13 @@ pub struct Sampler {
     net: NetCollector,
     disk: DiskCollector,
     fans: FanCollector,
+    gpu: GpuCollector,
+    last_procs: Option<Instant>,
+    last_sensors: Option<Instant>,
+    cached_procs: Vec<Process>,
+    cached_fans: FanSnapshot,
+    cached_sensors: SensorsSnapshot,
+    cached_thermal: Thermal,
 }
 
 impl Sampler {
@@ -81,23 +95,57 @@ impl Sampler {
             net: NetCollector::new(),
             disk: DiskCollector::new(),
             fans: FanCollector::new(),
+            gpu: GpuCollector::new(),
+            last_procs: None,
+            last_sensors: None,
+            cached_procs: Vec::new(),
+            cached_fans: FanSnapshot::default(),
+            cached_sensors: SensorsSnapshot::default(),
+            cached_thermal: Thermal::Nominal,
         })
     }
 
     pub fn tick(&mut self) -> Result<Snapshot> {
+        let now = Instant::now();
+        let procs_due = self
+            .last_procs
+            .is_none_or(|t| now.duration_since(t) >= PROCS_EVERY);
+        let sensors_due = self
+            .last_sensors
+            .is_none_or(|t| now.duration_since(t) >= SENSORS_EVERY);
+
         let mut snap = Snapshot::empty();
         snap.soc = self.soc.clone();
         snap.cpu = self.cpu.sample()?;
         assign_core_roles(&mut snap.cpu, &snap.soc);
         snap.memory = memory::sample()?;
-        snap.gpu = gpu::sample();
+        snap.gpu = self.gpu.sample();
         snap.network = self.net.sample();
+        if sensors_due {
+            self.disk.refresh_volumes();
+        }
         snap.disk = self.disk.sample();
-        snap.fans = self.fans.sample();
-        snap.sensors = self.fans.sample_sensors();
+
+        if sensors_due {
+            self.cached_fans = self.fans.sample();
+            self.cached_sensors = self.fans.sample_sensors();
+            self.cached_thermal = thermal::sample();
+            self.last_sensors = Some(now);
+        }
+        snap.fans = self.cached_fans.clone();
+        snap.sensors = self.cached_sensors.clone();
+        snap.thermal = self.cached_thermal;
         fill_missing_temps(&mut snap);
-        snap.processes = self.processes.sample()?;
-        snap.thermal = thermal::sample();
+
+        if procs_due {
+            self.cached_procs = self.processes.sample()?;
+            self.last_procs = Some(now);
+        }
+        snap.processes.clone_from(&self.cached_procs);
+        snap.sampled = Sampled {
+            procs: procs_due,
+            sensors: sensors_due,
+        };
         Ok(snap)
     }
 }
@@ -211,5 +259,51 @@ mod tests {
         let second = sampler.tick().expect("tick2");
         assert!(!second.cpu.cores.is_empty());
         assert!((0.0..=1.0).contains(&second.cpu.active));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "manual: cargo test -p plottypus-metrics -- --ignored --nocapture self_cpu_budget"]
+    fn self_cpu_budget() {
+        use std::time::{Duration, Instant};
+        let mut sampler = Sampler::new().expect("sampler");
+        let start = Instant::now();
+        let cpu0 = process_cpu_secs();
+        std::thread::sleep(Duration::from_secs(2));
+        for _ in 0..32 {
+            let _ = sampler.tick();
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        let wall = start.elapsed().as_secs_f64().max(0.001);
+        let cpu = (process_cpu_secs() - cpu0) / wall;
+        eprintln!("self  {:.1}%  (250ms, {wall:.0}s window)", cpu * 100.0);
+        assert!(cpu < 0.02, "self CPU {cpu:.3} exceeded 2%");
+    }
+
+    #[cfg(target_os = "macos")]
+    fn process_cpu_secs() -> f64 {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+        if rc != 0 {
+            return 0.0;
+        }
+        let usage = unsafe { usage.assume_init() };
+        let user = usage.ru_utime.tv_sec as f64 + f64::from(usage.ru_utime.tv_usec) / 1_000_000.0;
+        let sys = usage.ru_stime.tv_sec as f64 + f64::from(usage.ru_stime.tv_usec) / 1_000_000.0;
+        user + sys
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn first_tick_is_due_second_reuses_slow_collectors() {
+        let mut sampler = Sampler::new().expect("sampler");
+        let first = sampler.tick().expect("tick1");
+        assert!(first.sampled.procs);
+        assert!(first.sampled.sensors);
+        assert!(!first.processes.is_empty());
+        let second = sampler.tick().expect("tick2");
+        assert!(!second.sampled.procs);
+        assert!(!second.sampled.sensors);
+        assert_eq!(first.processes.len(), second.processes.len());
     }
 }

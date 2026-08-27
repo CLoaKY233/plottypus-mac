@@ -377,6 +377,21 @@ pub struct Process {
     pub cpu_spark: Vec<f32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sampled {
+    pub procs: bool,
+    pub sensors: bool,
+}
+
+impl Default for Sampled {
+    fn default() -> Self {
+        Self {
+            procs: true,
+            sensors: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     pub collected_at: Instant,
@@ -391,6 +406,7 @@ pub struct Snapshot {
     pub processes: Vec<Process>,
     pub thermal: Thermal,
     pub status: Option<String>,
+    pub sampled: Sampled,
 }
 
 impl Snapshot {
@@ -409,6 +425,7 @@ impl Snapshot {
             processes: Vec::new(),
             thermal: Thermal::Nominal,
             status: None,
+            sampled: Sampled::default(),
         }
     }
 }

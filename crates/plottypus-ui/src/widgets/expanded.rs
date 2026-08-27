@@ -3,73 +3,775 @@ use plottypus_core::{
     bytes_short, percent_display, watts_display,
 };
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::chrome::{
-    Axis, Graph, GraphInk, cell, push_kv, push_token, render_fill_bar, render_scaled_graph,
+    Axis, Graph, GraphInk, cell_titled, panel_block, panel_title, push_token, render_fill_bar,
+    render_scaled_graph,
 };
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
+use crate::widgets::grid::{Band, CellKind, CellSpec, CellTitle, Pack, pack};
+
+const ID_CPU: u8 = 0;
+const ID_SUPER_LOAD: u8 = 1;
+const ID_PERF_LOAD: u8 = 2;
+const ID_EFF_LOAD: u8 = 3;
+const ID_GPU_UTIL: u8 = 4;
+const ID_SUPER_ZONE: u8 = 10;
+const ID_PERF_ZONE: u8 = 11;
+const ID_EFF_ZONE: u8 = 12;
+const ID_PACKAGE: u8 = 13;
+const ID_GPU_TEMP: u8 = 14;
+const ID_HOP_CPU: u8 = 20;
+const ID_HOP_GPU: u8 = 21;
+const ID_HOP_SENS: u8 = 22;
+const ID_HOP_FAN: u8 = 23;
+const ID_HOP_PROC: u8 = 24;
+const ID_HOP_DISK: u8 = 25;
+const ID_HOP_NET: u8 = 26;
+const ID_SUPER_STRIP: u8 = 30;
+const ID_PERF_STRIP: u8 = 31;
+const ID_EFF_STRIP: u8 = 32;
+const ID_FAN0: u8 = 40;
+const ID_READINGS: u8 = 50;
+const ID_MEM: u8 = 60;
+const ID_NET_DOWN: u8 = 70;
+const ID_NET_UP: u8 = 71;
+const ID_DISK_READ: u8 = 80;
+const ID_DISK_WRITE: u8 = 81;
+const ID_VOLUMES: u8 = 82;
 
 pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme, panel: Panel) {
+    if panel == Panel::Processes {
+        super::processes::render(frame, area, view, theme);
+        return;
+    }
+    let block = panel_block(
+        panel,
+        outer_title(panel, view, theme),
+        view.is_focused(panel),
+        true,
+        theme,
+    );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    if panel == Panel::Gpu && view.snapshot.gpu.is_none() {
+        frame.render_widget(
+            Paragraph::new(Span::styled("no readings on this machine", theme.dim())),
+            inner,
+        );
+        return;
+    }
+    let placed = pack(inner, &bands_for(panel, view));
+    paint_pack(frame, &placed, view, theme, panel);
+}
+
+#[must_use]
+pub fn hop_hit(area: Rect, view: &AppView<'_>, col: u16, row: u16) -> Option<Panel> {
+    let panel = view.expanded?;
+    if panel == Panel::Processes {
+        return None;
+    }
+    let inner = inset(area);
+    pack(inner, &bands_for(panel, view)).hop_at(col, row)
+}
+
+fn inset(area: Rect) -> Rect {
+    Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    }
+}
+
+fn bands_for(panel: Panel, view: &AppView<'_>) -> Vec<Band> {
     match panel {
-        Panel::Cpu => cpu(frame, area, view, theme),
-        Panel::Gpu => gpu(frame, area, view, theme),
-        Panel::Mem => mem(frame, area, view, theme),
-        Panel::Net => net(frame, area, view, theme),
-        Panel::Disk => disk(frame, area, view, theme),
-        Panel::Fans => sensors(frame, area, view, theme),
-        Panel::Processes => super::processes::render(frame, area, view, theme),
+        Panel::Cpu => cpu_bands(view),
+        Panel::Gpu => gpu_bands(view),
+        Panel::Fans => sens_bands(view),
+        Panel::Mem => mem_bands(view),
+        Panel::Net => net_bands(view),
+        Panel::Disk => disk_bands(view),
+        Panel::Processes => Vec::new(),
     }
 }
 
-fn rows_of(area: Rect, weights: &[u16]) -> Vec<Rect> {
-    let constraints: Vec<Constraint> = weights.iter().map(|w| Constraint::Fill(*w)).collect();
-    Layout::vertical(constraints).split(area).to_vec()
+fn live(opt: Option<f32>, history: &History) -> bool {
+    opt.is_some() || !history.is_empty()
 }
 
-fn cols_of(area: Rect, weights: &[u16]) -> Vec<Rect> {
-    let constraints: Vec<Constraint> = weights.iter().map(|w| Constraint::Fill(*w)).collect();
-    Layout::horizontal(constraints).split(area).to_vec()
-}
-
-fn big(theme: &Theme) -> Style {
-    theme.title().add_modifier(Modifier::BOLD)
-}
-
-fn kv_cell(
-    frame: &mut Frame,
-    area: Rect,
-    title: &str,
-    pairs: &[(&str, String)],
-    value_style: Style,
-    theme: &Theme,
-) {
-    let inner = cell(frame, area, title, theme);
-    let mut spans = Vec::new();
-    for (key, value) in pairs {
-        push_kv(&mut spans, theme, key, value.clone(), value_style);
+fn graph_spec(id: u8, label: &'static str, value: Option<String>, present: bool) -> CellSpec {
+    CellSpec {
+        id,
+        kind: CellKind::Graph,
+        title: CellTitle {
+            label,
+            value,
+            hop: None,
+        },
+        min: (16, 5),
+        weight: 1,
+        present,
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
+}
+
+fn spark_spec(
+    id: u8,
+    label: &'static str,
+    value: Option<String>,
+    hop: Panel,
+    present: bool,
+) -> CellSpec {
+    CellSpec {
+        id,
+        kind: CellKind::Spark,
+        title: CellTitle {
+            label,
+            value,
+            hop: Some(hop),
+        },
+        min: (12, 3),
+        weight: 1,
+        present,
+    }
+}
+
+fn cluster_spec(id: u8, label: &'static str, value: Option<String>, present: bool) -> CellSpec {
+    CellSpec {
+        id,
+        kind: CellKind::Cluster,
+        title: CellTitle {
+            label,
+            value,
+            hop: None,
+        },
+        min: (14, 5),
+        weight: 1,
+        present,
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn cpu_bands(view: &AppView<'_>) -> Vec<Band> {
+    let s = has_cluster(view, ClusterKind::Super);
+    let p = has_cluster(view, ClusterKind::Performance);
+    let e = has_cluster(view, ClusterKind::Efficiency);
+    let grow = view.show_cores && (s || p || e);
+    vec![
+        Band {
+            min_height: 5,
+            grow_to: None,
+            cells: vec![
+                graph_spec(
+                    ID_CPU,
+                    "cpu",
+                    Some(ready_pct(view.ready, view.snapshot.cpu.scaled)),
+                    true,
+                ),
+                graph_spec(
+                    ID_SUPER_LOAD,
+                    "super",
+                    Some(percent_display(cluster_load(view, ClusterKind::Super))),
+                    s,
+                ),
+                graph_spec(
+                    ID_PERF_LOAD,
+                    "performance",
+                    Some(percent_display(cluster_load(
+                        view,
+                        ClusterKind::Performance,
+                    ))),
+                    p,
+                ),
+                graph_spec(
+                    ID_EFF_LOAD,
+                    "efficiency",
+                    Some(percent_display(cluster_load(view, ClusterKind::Efficiency))),
+                    e,
+                ),
+            ],
+        },
+        Band {
+            min_height: 5,
+            grow_to: None,
+            cells: vec![
+                graph_spec(
+                    ID_SUPER_ZONE,
+                    "super zone",
+                    zone_value(view, ClusterKind::Super),
+                    live(view.snapshot.sensors.s_c, view.s_temp_history),
+                ),
+                graph_spec(
+                    ID_PERF_ZONE,
+                    "perf zone",
+                    zone_value(view, ClusterKind::Performance),
+                    live(view.snapshot.sensors.p_c, view.p_temp_history),
+                ),
+                graph_spec(
+                    ID_EFF_ZONE,
+                    "eff zone",
+                    zone_value(view, ClusterKind::Efficiency),
+                    live(view.snapshot.sensors.e_c, view.e_temp_history),
+                ),
+                graph_spec(
+                    ID_PACKAGE,
+                    "package",
+                    view.snapshot
+                        .cpu
+                        .temp_c
+                        .or(view.snapshot.sensors.best_cpu_c())
+                        .map(|c| format!("{c:.0}°")),
+                    live(
+                        view.snapshot
+                            .cpu
+                            .temp_c
+                            .or(view.snapshot.sensors.best_cpu_c()),
+                        view.cpu_temp_history,
+                    ),
+                ),
+            ],
+        },
+        Band {
+            min_height: 3,
+            grow_to: None,
+            cells: vec![
+                spark_spec(
+                    ID_HOP_GPU,
+                    "gpu",
+                    view.snapshot.gpu.map(|g| percent_display(g.scaled)),
+                    Panel::Gpu,
+                    view.show_gpu && view.snapshot.gpu.is_some(),
+                ),
+                spark_spec(
+                    ID_HOP_FAN,
+                    "fan",
+                    peak_fan(view).map(|rpm| format!("{rpm} rpm")),
+                    Panel::Fans,
+                    view.show_fans && view.flags().has_fans,
+                ),
+            ],
+        },
+        Band {
+            min_height: 5,
+            grow_to: grow.then_some(8),
+            cells: vec![
+                cluster_spec(
+                    ID_SUPER_STRIP,
+                    "super",
+                    Some(strip_value(view, ClusterKind::Super)),
+                    s,
+                ),
+                cluster_spec(
+                    ID_PERF_STRIP,
+                    "performance",
+                    Some(strip_value(view, ClusterKind::Performance)),
+                    p,
+                ),
+                cluster_spec(
+                    ID_EFF_STRIP,
+                    "efficiency",
+                    Some(strip_value(view, ClusterKind::Efficiency)),
+                    e,
+                ),
+            ],
+        },
+    ]
+}
+
+fn gpu_bands(view: &AppView<'_>) -> Vec<Band> {
+    let Some(gpu) = view.snapshot.gpu else {
+        return Vec::new();
+    };
+    let temp = gpu.temp_c.or(view.snapshot.sensors.gpu_c);
+    vec![
+        Band {
+            min_height: 5,
+            grow_to: None,
+            cells: vec![graph_spec(
+                ID_GPU_UTIL,
+                "gpu",
+                Some(ready_pct(view.ready, gpu.scaled)),
+                true,
+            )],
+        },
+        Band {
+            min_height: 5,
+            grow_to: None,
+            cells: vec![graph_spec(
+                ID_GPU_TEMP,
+                "gpu temp",
+                temp.map(|c| format!("{c:.0}°")),
+                live(temp, view.gpu_temp_history),
+            )],
+        },
+        Band {
+            min_height: 3,
+            grow_to: None,
+            cells: vec![
+                spark_spec(
+                    ID_HOP_CPU,
+                    "cpu",
+                    Some(percent_display(view.snapshot.cpu.scaled)),
+                    Panel::Cpu,
+                    true,
+                ),
+                spark_spec(
+                    ID_HOP_SENS,
+                    "sens",
+                    view.snapshot
+                        .sensors
+                        .best_cpu_c()
+                        .map(|c| format!("{c:.0}°")),
+                    Panel::Fans,
+                    view.show_fans && view.flags().has_fans,
+                ),
+            ],
+        },
+    ]
+}
+
+#[allow(clippy::too_many_lines)]
+fn sens_bands(view: &AppView<'_>) -> Vec<Band> {
+    let mut fans = Vec::new();
+    for (i, fan) in view.snapshot.fans.fans.iter().take(4).enumerate() {
+        if fan.rpm == 0 && fan.max_rpm == 0 {
+            continue;
+        }
+        fans.push(graph_spec(
+            ID_FAN0.saturating_add(i as u8),
+            "fan",
+            Some(format!("{} rpm", fan.rpm)),
+            true,
+        ));
+        if let Some(cell) = fans.last_mut() {
+            cell.title.label = match i {
+                0 => "Fan 1",
+                1 => "Fan 2",
+                2 => "Fan 3",
+                _ => "Fan 4",
+            };
+        }
+    }
+    let extras = extra_readings(view);
+    vec![
+        Band {
+            min_height: 5,
+            grow_to: None,
+            cells: vec![
+                graph_spec(
+                    ID_SUPER_ZONE,
+                    "super zone",
+                    zone_value(view, ClusterKind::Super),
+                    live(view.snapshot.sensors.s_c, view.s_temp_history),
+                ),
+                graph_spec(
+                    ID_PERF_ZONE,
+                    "perf zone",
+                    zone_value(view, ClusterKind::Performance),
+                    live(view.snapshot.sensors.p_c, view.p_temp_history),
+                ),
+                graph_spec(
+                    ID_EFF_ZONE,
+                    "eff zone",
+                    zone_value(view, ClusterKind::Efficiency),
+                    live(view.snapshot.sensors.e_c, view.e_temp_history),
+                ),
+                graph_spec(
+                    ID_PACKAGE,
+                    "package",
+                    view.snapshot
+                        .sensors
+                        .best_cpu_c()
+                        .map(|c| format!("{c:.0}°")),
+                    live(view.snapshot.sensors.best_cpu_c(), view.cpu_temp_history),
+                ),
+                graph_spec(
+                    ID_GPU_TEMP,
+                    "gpu temp",
+                    view.snapshot
+                        .sensors
+                        .gpu_c
+                        .or(view.snapshot.gpu.and_then(|g| g.temp_c))
+                        .map(|c| format!("{c:.0}°")),
+                    live(
+                        view.snapshot
+                            .sensors
+                            .gpu_c
+                            .or(view.snapshot.gpu.and_then(|g| g.temp_c)),
+                        view.gpu_temp_history,
+                    ),
+                ),
+            ],
+        },
+        Band {
+            min_height: 5,
+            grow_to: None,
+            cells: fans,
+        },
+        Band {
+            min_height: 3,
+            grow_to: None,
+            cells: vec![
+                spark_spec(
+                    ID_HOP_CPU,
+                    "cpu",
+                    Some(percent_display(view.snapshot.cpu.scaled)),
+                    Panel::Cpu,
+                    true,
+                ),
+                spark_spec(
+                    ID_HOP_GPU,
+                    "gpu",
+                    view.snapshot.gpu.map(|g| percent_display(g.scaled)),
+                    Panel::Gpu,
+                    view.show_gpu && view.snapshot.gpu.is_some(),
+                ),
+                CellSpec {
+                    id: ID_READINGS,
+                    kind: CellKind::List,
+                    title: CellTitle {
+                        label: "readings",
+                        value: None,
+                        hop: None,
+                    },
+                    min: (16, 4),
+                    weight: 1,
+                    present: !extras.is_empty(),
+                },
+            ],
+        },
+    ]
+}
+
+fn mem_bands(view: &AppView<'_>) -> Vec<Band> {
+    let m = &view.snapshot.memory;
+    let app = m
+        .used_bytes
+        .saturating_sub(m.wired_bytes)
+        .saturating_sub(m.compressed_bytes);
+    let mut parts = Vec::new();
+    if m.wired_bytes > 0 {
+        parts.push(cluster_spec(
+            33,
+            "wired",
+            Some(bytes_short(m.wired_bytes)),
+            true,
+        ));
+    }
+    if m.compressed_bytes > 0 {
+        parts.push(cluster_spec(
+            34,
+            "compressed",
+            Some(bytes_short(m.compressed_bytes)),
+            true,
+        ));
+    }
+    if app > 0 {
+        parts.push(cluster_spec(35, "app", Some(bytes_short(app)), true));
+    }
+    vec![
+        Band {
+            min_height: 5,
+            grow_to: None,
+            cells: vec![graph_spec(
+                ID_MEM,
+                "memory",
+                Some(format!(
+                    "{} / {}",
+                    bytes_short(m.used_bytes),
+                    bytes_short(m.total_bytes)
+                )),
+                true,
+            )],
+        },
+        Band {
+            min_height: 5,
+            grow_to: None,
+            cells: parts,
+        },
+        Band {
+            min_height: 3,
+            grow_to: None,
+            cells: vec![spark_spec(
+                ID_HOP_PROC,
+                "proc",
+                None,
+                Panel::Processes,
+                true,
+            )],
+        },
+    ]
+}
+
+fn net_bands(view: &AppView<'_>) -> Vec<Band> {
+    vec![
+        Band {
+            min_height: 5,
+            grow_to: None,
+            cells: vec![
+                graph_spec(
+                    ID_NET_DOWN,
+                    "down",
+                    Some(bits_per_sec(view.snapshot.network.rx_bps)),
+                    true,
+                ),
+                graph_spec(
+                    ID_NET_UP,
+                    "up",
+                    Some(bits_per_sec(view.snapshot.network.tx_bps)),
+                    true,
+                ),
+            ],
+        },
+        Band {
+            min_height: 3,
+            grow_to: None,
+            cells: vec![spark_spec(
+                ID_HOP_DISK,
+                "disk",
+                Some(bytes_per_sec(
+                    view.snapshot
+                        .disk
+                        .read_bps
+                        .saturating_add(view.snapshot.disk.write_bps),
+                )),
+                Panel::Disk,
+                view.show_disk && view.flags().has_disk,
+            )],
+        },
+    ]
+}
+
+fn disk_bands(view: &AppView<'_>) -> Vec<Band> {
+    vec![
+        Band {
+            min_height: 5,
+            grow_to: None,
+            cells: vec![
+                graph_spec(
+                    ID_DISK_READ,
+                    "read",
+                    Some(bytes_per_sec(view.snapshot.disk.read_bps)),
+                    true,
+                ),
+                graph_spec(
+                    ID_DISK_WRITE,
+                    "write",
+                    Some(bytes_per_sec(view.snapshot.disk.write_bps)),
+                    true,
+                ),
+            ],
+        },
+        Band {
+            min_height: 4,
+            grow_to: None,
+            cells: vec![CellSpec {
+                id: ID_VOLUMES,
+                kind: CellKind::List,
+                title: CellTitle {
+                    label: "volumes",
+                    value: None,
+                    hop: None,
+                },
+                min: (16, 4),
+                weight: 1,
+                present: !view.snapshot.disk.volumes.is_empty(),
+            }],
+        },
+        Band {
+            min_height: 3,
+            grow_to: None,
+            cells: vec![spark_spec(
+                ID_HOP_NET,
+                "net",
+                None,
+                Panel::Net,
+                view.show_net,
+            )],
+        },
+    ]
+}
+
+#[allow(clippy::too_many_lines)]
+fn paint_pack(frame: &mut Frame, placed: &Pack, view: &AppView<'_>, theme: &Theme, _panel: Panel) {
+    for cell in &placed.cells {
+        match cell.id {
+            ID_GPU_UTIL | ID_HOP_GPU => paint_series(
+                frame,
+                cell,
+                view,
+                view.gpu_history,
+                theme.gpu,
+                GraphInk::Load(view.snapshot.thermal),
+                Scale::LOAD,
+                Axis::Percent,
+                theme,
+            ),
+            ID_CPU | ID_HOP_CPU => paint_series(
+                frame,
+                cell,
+                view,
+                view.cpu_history,
+                theme.cpu,
+                GraphInk::Load(view.snapshot.thermal),
+                Scale::LOAD,
+                Axis::Percent,
+                theme,
+            ),
+            ID_SUPER_LOAD => paint_series(
+                frame,
+                cell,
+                view,
+                view.s_load_history,
+                theme.cpu,
+                GraphInk::Load(view.snapshot.thermal),
+                Scale::LOAD,
+                Axis::Percent,
+                theme,
+            ),
+            ID_PERF_LOAD => paint_series(
+                frame,
+                cell,
+                view,
+                view.p_load_history,
+                theme.cpu,
+                GraphInk::Load(view.snapshot.thermal),
+                Scale::LOAD,
+                Axis::Percent,
+                theme,
+            ),
+            ID_EFF_LOAD => paint_series(
+                frame,
+                cell,
+                view,
+                view.e_load_history,
+                theme.cpu,
+                GraphInk::Load(view.snapshot.thermal),
+                Scale::LOAD,
+                Axis::Percent,
+                theme,
+            ),
+            ID_SUPER_ZONE => paint_temp(frame, cell, view.s_temp_history, theme),
+            ID_PERF_ZONE => paint_temp(frame, cell, view.p_temp_history, theme),
+            ID_EFF_ZONE => paint_temp(frame, cell, view.e_temp_history, theme),
+            ID_PACKAGE | ID_HOP_SENS | ID_HOP_FAN => {
+                paint_temp(frame, cell, view.cpu_temp_history, theme);
+            }
+            ID_GPU_TEMP => paint_temp(frame, cell, view.gpu_temp_history, theme),
+            ID_HOP_PROC => paint_titled_empty(frame, cell, theme),
+            ID_HOP_DISK => paint_series(
+                frame,
+                cell,
+                view,
+                view.disk_history,
+                theme.disk,
+                GraphInk::Flat,
+                Scale::Auto { floor: 1_024.0 },
+                Axis::Bytes,
+                theme,
+            ),
+            ID_SUPER_STRIP => paint_strip(frame, cell, ClusterKind::Super, view, theme),
+            ID_PERF_STRIP => paint_strip(frame, cell, ClusterKind::Performance, view, theme),
+            ID_EFF_STRIP => paint_strip(frame, cell, ClusterKind::Efficiency, view, theme),
+            ID_MEM => paint_series(
+                frame,
+                cell,
+                view,
+                view.mem_history,
+                theme.mem,
+                GraphInk::Load(view.snapshot.thermal),
+                Scale::Fixed(1.0),
+                Axis::Percent,
+                theme,
+            ),
+            ID_NET_DOWN | ID_HOP_NET => paint_series(
+                frame,
+                cell,
+                view,
+                view.net_rx_history,
+                theme.net,
+                GraphInk::Flat,
+                Scale::Auto { floor: 8_000.0 },
+                Axis::Bits,
+                theme,
+            ),
+            ID_NET_UP => paint_series(
+                frame,
+                cell,
+                view,
+                view.net_tx_history,
+                theme.net,
+                GraphInk::Flat,
+                Scale::Auto { floor: 8_000.0 },
+                Axis::Bits,
+                theme,
+            ),
+            ID_DISK_READ => paint_series(
+                frame,
+                cell,
+                view,
+                view.disk_read_history,
+                theme.disk,
+                GraphInk::Flat,
+                Scale::Auto { floor: 1_024.0 },
+                Axis::Bytes,
+                theme,
+            ),
+            ID_DISK_WRITE => paint_series(
+                frame,
+                cell,
+                view,
+                view.disk_write_history,
+                theme.disk,
+                GraphInk::Flat,
+                Scale::Auto { floor: 1_024.0 },
+                Axis::Bytes,
+                theme,
+            ),
+            ID_VOLUMES => paint_volumes(frame, cell.rect, view, theme),
+            ID_READINGS => paint_readings(frame, cell.rect, &extra_readings(view), theme),
+            id if (ID_FAN0..ID_FAN0 + 4).contains(&id) => {
+                let i = usize::from(id - ID_FAN0);
+                if let Some(fan) = view.snapshot.fans.fans.get(i) {
+                    paint_fan(frame, cell, fan, view.fan_histories.get(i), theme);
+                }
+            }
+            33..=35 => paint_mem_part(frame, cell, view, theme),
+            _ => {}
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn graph_cell(
+fn paint_series(
     frame: &mut Frame,
-    area: Rect,
-    title: &str,
+    cell: &crate::widgets::grid::Placed,
+    view: &AppView<'_>,
     history: &History,
     accent: ratatui::style::Color,
-    thermal: Thermal,
-    theme: &Theme,
+    ink: GraphInk,
     scale: Scale,
     axis: Axis,
+    theme: &Theme,
 ) {
-    let inner = cell(frame, area, title, theme);
+    let (label, value) = series_title(cell.id, view);
+    let inner = cell_titled(
+        frame,
+        cell.rect,
+        label,
+        value.as_deref(),
+        cell.hop.is_some(),
+        theme,
+    );
     render_scaled_graph(
         frame,
         inner,
@@ -79,243 +781,141 @@ fn graph_cell(
             theme,
             scale,
             axis,
-            ink: GraphInk::Load(thermal),
+            ink,
         },
     );
 }
 
-fn bar_at_bottom(frame: &mut Frame, area: Rect, ratio: f32, color: ratatui::style::Color) {
-    let row = Rect {
-        x: area.x,
-        y: area.y.saturating_add(area.height.saturating_sub(1)),
-        width: area.width,
-        height: 1,
+fn series_title(id: u8, view: &AppView<'_>) -> (&'static str, Option<String>) {
+    let (label, _) = label_for(id);
+    let value = match id {
+        ID_CPU => Some(ready_pct(view.ready, view.snapshot.cpu.scaled)),
+        ID_GPU_UTIL => view.snapshot.gpu.map(|g| ready_pct(view.ready, g.scaled)),
+        ID_SUPER_LOAD => Some(percent_display(cluster_load(view, ClusterKind::Super))),
+        ID_PERF_LOAD => Some(percent_display(cluster_load(
+            view,
+            ClusterKind::Performance,
+        ))),
+        ID_EFF_LOAD => Some(percent_display(cluster_load(view, ClusterKind::Efficiency))),
+        ID_HOP_CPU => Some(percent_display(view.snapshot.cpu.scaled)),
+        ID_HOP_GPU => view.snapshot.gpu.map(|g| percent_display(g.scaled)),
+        ID_NET_DOWN => Some(bits_per_sec(view.snapshot.network.rx_bps)),
+        ID_NET_UP => Some(bits_per_sec(view.snapshot.network.tx_bps)),
+        ID_DISK_READ | ID_HOP_DISK => Some(bytes_per_sec(view.snapshot.disk.read_bps)),
+        ID_DISK_WRITE => Some(bytes_per_sec(view.snapshot.disk.write_bps)),
+        ID_MEM => Some(format!(
+            "{} / {}",
+            bytes_short(view.snapshot.memory.used_bytes),
+            bytes_short(view.snapshot.memory.total_bytes)
+        )),
+        _ => None,
     };
-    render_fill_bar(frame, row, ratio, color);
+    (label, value)
 }
 
-fn cpu(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let kinds: Vec<ClusterKind> = ClusterKind::ALL
-        .into_iter()
-        .filter(|kind| has_cores(view, *kind))
-        .collect();
-    let show_clusters = !kinds.is_empty() && area.height >= 12;
-    let rows = if show_clusters {
-        Layout::vertical([
-            Constraint::Length(5),
-            Constraint::Fill(2),
-            Constraint::Fill(1),
-        ])
-        .split(area)
-        .to_vec()
-    } else {
-        Layout::vertical([Constraint::Length(5.min(area.height)), Constraint::Fill(1)])
-            .split(area)
-            .to_vec()
-    };
-    cpu_stats(frame, rows[0], view, theme);
-    cpu_graphs(frame, rows[1], view, theme);
-    if !show_clusters {
-        return;
-    }
-    let cols = cols_of(rows[2], &vec![1; kinds.len()]);
-    for (kind, col) in kinds.iter().zip(cols.iter().copied()) {
-        cluster_cell(frame, col, *kind, view, theme);
-    }
-}
-
-fn cpu_graphs(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let has_temp = view.snapshot.cpu.temp_c.is_some()
-        || view.snapshot.sensors.best_cpu_c().is_some()
-        || !view.cpu_temp_history.is_empty();
-    if has_temp {
-        let cols = cols_of(area, &[3, 2]);
-        graph_cell(
-            frame,
-            cols[0],
-            "cpu",
-            view.cpu_history,
-            theme.cpu,
-            view.snapshot.thermal,
-            theme,
-            Scale::LOAD,
-            Axis::Percent,
-        );
-        graph_cell(
-            frame,
-            cols[1],
-            "cpu temp",
-            view.cpu_temp_history,
-            theme.temp,
-            view.snapshot.thermal,
-            theme,
-            Scale::TEMP,
-            Axis::Celsius,
-        );
-        return;
-    }
-    graph_cell(
-        frame,
-        area,
-        "cpu",
-        view.cpu_history,
-        theme.cpu,
-        view.snapshot.thermal,
-        theme,
-        Scale::LOAD,
-        Axis::Percent,
-    );
-}
-
-fn cpu_stats(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let watts = view.snapshot.cpu.watts.filter(|w| *w > 0.0);
-    let freq = view.snapshot.cpu.freq_mhz.filter(|mhz| *mhz > 0);
-    let temp = view
-        .snapshot
-        .cpu
-        .temp_c
-        .or(view.snapshot.sensors.best_cpu_c());
-    let thermal = view.snapshot.thermal;
-    let mut stat_w = vec![2_u16];
-    if watts.is_some() {
-        stat_w.push(1);
-    }
-    if freq.is_some() {
-        stat_w.push(1);
-    }
-    if temp.is_some() {
-        stat_w.push(1);
-    }
-    if !thermal.is_nominal() {
-        stat_w.push(1);
-    }
-    let stats = cols_of(area, &stat_w);
-    let mut i = 0;
-    cpu_load_cell(frame, stats[i], view, theme);
-    i += 1;
-    if let Some(watts) = watts
-        && let Some(slot) = stats.get(i).copied()
-    {
-        kv_cell(
-            frame,
-            slot,
-            "power",
-            &[("cpu", watts_display(watts))],
-            theme.cpu(),
-            theme,
-        );
-        i += 1;
-    }
-    if let Some(mhz) = freq
-        && let Some(slot) = stats.get(i).copied()
-    {
-        kv_cell(
-            frame,
-            slot,
-            "clock",
-            &[("all cores", freq_label(mhz))],
-            theme.fg(),
-            theme,
-        );
-        i += 1;
-    }
-    if let Some(c) = temp
-        && let Some(slot) = stats.get(i).copied()
-    {
-        kv_cell(
-            frame,
-            slot,
-            "temp",
-            &[("package", format!("{c:.0}°"))],
-            theme.temp(),
-            theme,
-        );
-        i += 1;
-    }
-    if !thermal.is_nominal()
-        && let Some(slot) = stats.get(i).copied()
-    {
-        kv_cell(
-            frame,
-            slot,
-            "thermal",
-            &[("state", thermal_word(thermal).to_owned())],
-            theme.thermal(thermal),
-            theme,
-        );
+fn label_for(id: u8) -> (&'static str, Option<String>) {
+    match id {
+        ID_CPU | ID_HOP_CPU => ("cpu", None),
+        ID_GPU_UTIL | ID_HOP_GPU => ("gpu", None),
+        ID_SUPER_LOAD | ID_SUPER_STRIP => ("super", None),
+        ID_PERF_LOAD | ID_PERF_STRIP => ("performance", None),
+        ID_EFF_LOAD | ID_EFF_STRIP => ("efficiency", None),
+        ID_SUPER_ZONE => ("super zone", None),
+        ID_PERF_ZONE => ("perf zone", None),
+        ID_EFF_ZONE => ("eff zone", None),
+        ID_PACKAGE => ("package", None),
+        ID_GPU_TEMP => ("gpu temp", None),
+        ID_HOP_SENS => ("sens", None),
+        ID_HOP_FAN => ("fan", None),
+        ID_HOP_PROC => ("proc", None),
+        ID_HOP_DISK => ("disk", None),
+        ID_HOP_NET => ("net", None),
+        ID_MEM => ("memory", None),
+        ID_NET_DOWN => ("down", None),
+        ID_NET_UP => ("up", None),
+        ID_DISK_READ => ("read", None),
+        ID_DISK_WRITE => ("write", None),
+        ID_VOLUMES => ("volumes", None),
+        ID_READINGS => ("readings", None),
+        ID_FAN0 => ("Fan 1", None),
+        x if x == ID_FAN0 + 1 => ("Fan 2", None),
+        x if x == ID_FAN0 + 2 => ("Fan 3", None),
+        x if x == ID_FAN0 + 3 => ("Fan 4", None),
+        33 => ("wired", None),
+        34 => ("compressed", None),
+        35 => ("app", None),
+        _ => ("", None),
     }
 }
 
-fn cpu_load_cell(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let inner = cell(frame, area, "load", theme);
-    let mut spans = Vec::new();
-    push_token(
-        &mut spans,
-        ready_pct(view.ready, view.snapshot.cpu.scaled),
-        big(theme),
-    );
-    let active = view.snapshot.cpu.active;
-    if view.ready && (view.snapshot.cpu.scaled - active).abs() > 0.01 {
-        push_token(
-            &mut spans,
-            format!("busy {}", percent_display(active)),
-            theme.dim(),
-        );
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), inner);
-    bar_at_bottom(frame, inner, view.snapshot.cpu.scaled, theme.cpu);
-}
-
-fn cluster_load(view: &AppView<'_>, kind: ClusterKind) -> f32 {
-    let from_cluster = match kind {
-        ClusterKind::Efficiency => view.snapshot.cpu.e_cluster.as_ref().map(|x| x.scaled),
-        ClusterKind::Performance => view.snapshot.cpu.p_cluster.as_ref().map(|x| x.scaled),
-        ClusterKind::Super => view.snapshot.cpu.s_cluster.as_ref().map(|x| x.scaled),
-    };
-    if let Some(load) = from_cluster {
-        return load;
-    }
-    let mut sum = 0.0_f32;
-    let mut n = 0_u32;
-    for core in &view.snapshot.cpu.cores {
-        if core.kind == kind {
-            sum += core.scaled;
-            n += 1;
-        }
-    }
-    if n == 0 { 0.0 } else { sum / n as f32 }
-}
-
-fn has_cores(view: &AppView<'_>, kind: ClusterKind) -> bool {
-    view.snapshot.cpu.cores.iter().any(|core| core.kind == kind)
-}
-
-fn cluster_cell(
+fn paint_temp(
     frame: &mut Frame,
-    area: Rect,
+    cell: &crate::widgets::grid::Placed,
+    history: &History,
+    theme: &Theme,
+) {
+    let (label, _) = label_for(cell.id);
+    let value = history.last().map(|c| format!("{c:.0}°"));
+    let inner = cell_titled(
+        frame,
+        cell.rect,
+        label,
+        value.as_deref(),
+        cell.hop.is_some(),
+        theme,
+    );
+    render_scaled_graph(
+        frame,
+        inner,
+        Graph {
+            history,
+            accent: theme.temp,
+            theme,
+            scale: Scale::TEMP,
+            axis: Axis::Celsius,
+            ink: GraphInk::Flat,
+        },
+    );
+}
+
+fn paint_titled_empty(frame: &mut Frame, cell: &crate::widgets::grid::Placed, theme: &Theme) {
+    let (label, _) = label_for(cell.id);
+    let _ = cell_titled(frame, cell.rect, label, None, cell.hop.is_some(), theme);
+}
+
+fn paint_strip(
+    frame: &mut Frame,
+    cell: &crate::widgets::grid::Placed,
     kind: ClusterKind,
     view: &AppView<'_>,
     theme: &Theme,
 ) {
-    let inner = cell(frame, area, kind.word(), theme);
-    let show_cores = view.show_cores && view.snapshot.cpu.cores.iter().any(|c| c.kind == kind);
-    let parts = if show_cores && inner.height >= 4 {
-        rows_of(inner, &[1, 1, 4])
-    } else {
-        rows_of(inner, &[1, 1])
-    };
     let load = cluster_load(view, kind);
-    let mut spans = Vec::new();
-    push_token(&mut spans, percent_display(load), theme.title());
+    let mut value = percent_display(load);
     if let Some(c) = view.snapshot.sensors.zone_temp(kind) {
-        push_token(&mut spans, format!("{c:.0}°"), theme.temp());
+        value = format!("{value}  {c:.0}°");
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), parts[0]);
-    render_fill_bar(frame, parts[1], load, theme.cpu);
-
-    if !show_cores || parts.len() < 3 {
+    let inner = cell_titled(frame, cell.rect, kind.word(), Some(&value), false, theme);
+    if inner.height == 0 {
         return;
     }
+    let bar = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 1,
+    };
+    render_fill_bar(frame, bar, load, theme.cpu);
+    let mosaic = view.show_cores && cell.rect.height >= 8;
+    if !mosaic {
+        return;
+    }
+    let grid = Rect {
+        x: inner.x,
+        y: inner.y.saturating_add(1),
+        width: inner.width,
+        height: inner.height.saturating_sub(1),
+    };
     let mut cores: Vec<CoreSample> = view
         .snapshot
         .cpu
@@ -325,12 +925,13 @@ fn cluster_cell(
         .filter(|core| core.kind == kind)
         .collect();
     cores.sort_by_key(|core| core.index);
-    if !cores.is_empty() && parts[2].height > 0 {
-        render_core_grid(frame, parts[2], &cores, theme);
-    }
+    render_core_grid(frame, grid, &cores, theme);
 }
 
 fn render_core_grid(frame: &mut Frame, area: Rect, cores: &[CoreSample], theme: &Theme) {
+    if area.height == 0 || cores.is_empty() {
+        return;
+    }
     let height = usize::from(area.height).max(1);
     let mut lines: Vec<Line<'static>> = vec![Line::default(); height];
     for (i, core) in cores.iter().enumerate() {
@@ -356,593 +957,24 @@ fn render_core_grid(frame: &mut Frame, area: Rect, cores: &[CoreSample], theme: 
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn gpu(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let Some(sample) = view.snapshot.gpu else {
-        let inner = cell(frame, area, "gpu", theme);
-        frame.render_widget(Clear, inner);
-        frame.render_widget(
-            Paragraph::new(Span::styled("no readings on this machine", theme.dim())),
-            inner,
-        );
-        return;
-    };
-    let temp = sample.temp_c.or(view.snapshot.sensors.gpu_c);
-    let rows = rows_of(area, &[4, 9]);
-    gpu_stats(frame, rows[0], view, sample, theme);
-    gpu_graphs(
-        frame,
-        rows[1],
-        view,
-        temp.is_some() || !view.gpu_temp_history.is_empty(),
-        theme,
-    );
-}
-
-fn gpu_stats(
+fn paint_fan(
     frame: &mut Frame,
-    area: Rect,
-    view: &AppView<'_>,
-    sample: plottypus_core::GpuSnapshot,
-    theme: &Theme,
-) {
-    let watts = sample.watts.filter(|w| *w > 0.0);
-    let ane = sample.ane_watts.filter(|w| *w > 0.0);
-    let freq = sample.freq_mhz.filter(|mhz| *mhz > 0);
-    let temp = sample.temp_c.or(view.snapshot.sensors.gpu_c);
-    let cores = view.snapshot.soc.gpu_cores;
-    let mut stat_w = vec![1_u16];
-    if watts.is_some() || ane.is_some() {
-        stat_w.push(1);
-    }
-    if freq.is_some() {
-        stat_w.push(1);
-    }
-    if temp.is_some() {
-        stat_w.push(1);
-    }
-    if cores > 0 {
-        stat_w.push(1);
-    }
-    let stats = cols_of(area, &stat_w);
-    let mut i = 0;
-    kv_cell(
-        frame,
-        stats[i],
-        "util",
-        &[("render", ready_pct(view.ready, sample.scaled))],
-        theme.gpu(),
-        theme,
-    );
-    i += 1;
-    if (watts.is_some() || ane.is_some())
-        && let Some(slot) = stats.get(i).copied()
-    {
-        let mut pairs = Vec::new();
-        if let Some(w) = watts {
-            pairs.push(("gpu", watts_display(w)));
-        }
-        if let Some(w) = ane {
-            pairs.push(("ane", watts_display(w)));
-        }
-        kv_cell(frame, slot, "power", &pairs, theme.fg(), theme);
-        i += 1;
-    }
-    if let Some(mhz) = freq
-        && let Some(slot) = stats.get(i).copied()
-    {
-        kv_cell(
-            frame,
-            slot,
-            "clock",
-            &[("freq", freq_label(mhz))],
-            theme.fg(),
-            theme,
-        );
-        i += 1;
-    }
-    if let Some(c) = temp
-        && let Some(slot) = stats.get(i).copied()
-    {
-        kv_cell(
-            frame,
-            slot,
-            "temp",
-            &[("gpu", format!("{c:.0}°"))],
-            theme.temp(),
-            theme,
-        );
-        i += 1;
-    }
-    if cores > 0
-        && let Some(slot) = stats.get(i).copied()
-    {
-        kv_cell(
-            frame,
-            slot,
-            "cores",
-            &[("gpu", format!("{cores}c"))],
-            theme.fg(),
-            theme,
-        );
-    }
-}
-
-fn gpu_graphs(frame: &mut Frame, area: Rect, view: &AppView<'_>, with_temp: bool, theme: &Theme) {
-    if with_temp {
-        let cols = cols_of(area, &[3, 2]);
-        graph_cell(
-            frame,
-            cols[0],
-            "gpu util",
-            view.gpu_history,
-            theme.gpu,
-            view.snapshot.thermal,
-            theme,
-            Scale::LOAD,
-            Axis::Percent,
-        );
-        graph_cell(
-            frame,
-            cols[1],
-            "gpu temp",
-            view.gpu_temp_history,
-            theme.temp,
-            view.snapshot.thermal,
-            theme,
-            Scale::TEMP,
-            Axis::Celsius,
-        );
-        return;
-    }
-    graph_cell(
-        frame,
-        area,
-        "gpu util",
-        view.gpu_history,
-        theme.gpu,
-        view.snapshot.thermal,
-        theme,
-        Scale::LOAD,
-        Axis::Percent,
-    );
-}
-
-fn mem(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let m = &view.snapshot.memory;
-    let show_swap = m.swap_used_bytes > 0 || m.swap_total_bytes > 0;
-    let show_cache = m.cache_bytes > 0;
-    let app = m
-        .used_bytes
-        .saturating_sub(m.wired_bytes)
-        .saturating_sub(m.compressed_bytes);
-    let mut parts: Vec<(&str, u64)> = Vec::new();
-    if m.wired_bytes > 0 {
-        parts.push(("wired", m.wired_bytes));
-    }
-    if m.compressed_bytes > 0 {
-        parts.push(("compressed", m.compressed_bytes));
-    }
-    if app > 0 {
-        parts.push(("app", app));
-    }
-    let show_parts = !parts.is_empty();
-
-    let mut weights = vec![3_u16, 9];
-    if show_parts {
-        weights.push(5);
-    }
-    let rows = rows_of(area, &weights);
-
-    let mut stat_w = vec![3_u16];
-    if show_swap {
-        stat_w.push(2);
-    }
-    if show_cache {
-        stat_w.push(2);
-    }
-    let stats = cols_of(rows[0], &stat_w);
-    let mut i = 0;
-    kv_cell(
-        frame,
-        stats[i],
-        "memory",
-        &[
-            (
-                "used",
-                format!(
-                    "{} / {}",
-                    bytes_short(m.used_bytes),
-                    bytes_short(m.total_bytes)
-                ),
-            ),
-            ("pressure", pressure_word(m.pressure).to_owned()),
-        ],
-        theme.mem(),
-        theme,
-    );
-    i += 1;
-    if show_swap && let Some(area) = stats.get(i).copied() {
-        kv_cell(
-            frame,
-            area,
-            "swap",
-            &[(
-                "used",
-                format!(
-                    "{} / {}",
-                    bytes_short(m.swap_used_bytes),
-                    bytes_short(m.swap_total_bytes)
-                ),
-            )],
-            theme.fg(),
-            theme,
-        );
-        i += 1;
-    }
-    if show_cache && let Some(area) = stats.get(i).copied() {
-        kv_cell(
-            frame,
-            area,
-            "cached",
-            &[("files", bytes_short(m.cache_bytes))],
-            theme.fg(),
-            theme,
-        );
-    }
-
-    graph_cell(
-        frame,
-        rows[1],
-        "memory",
-        view.mem_history,
-        theme.mem,
-        view.snapshot.thermal,
-        theme,
-        Scale::Fixed(1.0),
-        Axis::Percent,
-    );
-
-    if show_parts && rows.len() > 2 {
-        let cols = cols_of(rows[2], &vec![1; parts.len()]);
-        for ((title, bytes), col) in parts.into_iter().zip(cols) {
-            composition_cell(frame, col, title, bytes, m.total_bytes, theme);
-        }
-    }
-}
-
-fn composition_cell(
-    frame: &mut Frame,
-    area: Rect,
-    title: &str,
-    bytes: u64,
-    total: u64,
-    theme: &Theme,
-) {
-    let inner = cell(frame, area, title, theme);
-    let ratio = if total == 0 {
-        0.0
-    } else {
-        bytes as f32 / total as f32
-    };
-    let parts = rows_of(inner, &[1, 3]);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(bytes_short(bytes), theme.title()))),
-        parts[0],
-    );
-    render_fill_bar(frame, parts[1], ratio, theme.mem);
-}
-
-fn net(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let iface = view.snapshot.network.iface.clone();
-    let title_down = if iface.is_empty() {
-        String::from("down")
-    } else {
-        format!("down · {iface}")
-    };
-    let title_up = if iface.is_empty() {
-        String::from("up")
-    } else {
-        format!("up · {iface}")
-    };
-    let cols = cols_of(area, &[1, 1]);
-
-    let down_inner = cell(frame, cols[0], &title_down, theme);
-    let parts = rows_of(down_inner, &[1, 8]);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!("↓ {}", bits_per_sec(view.snapshot.network.rx_bps)),
-            theme.net(),
-        ))),
-        parts[0],
-    );
-    render_scaled_graph(
-        frame,
-        parts[1],
-        Graph {
-            history: view.net_rx_history,
-            accent: theme.net,
-            theme,
-            scale: Scale::Auto { floor: 8_000.0 },
-            axis: Axis::Bits,
-            ink: GraphInk::Flat,
-        },
-    );
-
-    let up_inner = cell(frame, cols[1], &title_up, theme);
-    let parts = rows_of(up_inner, &[1, 8]);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!("↑ {}", bits_per_sec(view.snapshot.network.tx_bps)),
-            theme.net(),
-        ))),
-        parts[0],
-    );
-    render_scaled_graph(
-        frame,
-        parts[1],
-        Graph {
-            history: view.net_tx_history,
-            accent: theme.net,
-            theme,
-            scale: Scale::Auto { floor: 8_000.0 },
-            axis: Axis::Bits,
-            ink: GraphInk::Flat,
-        },
-    );
-}
-
-fn disk(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let cols = cols_of(area, &[2, 3]);
-    let vols_inner = cell(frame, cols[0], "volumes", theme);
-    let vol_rows = if view.snapshot.disk.volumes.is_empty() {
-        1
-    } else {
-        view.snapshot
-            .disk
-            .volumes
-            .len()
-            .min(usize::from(vols_inner.height.max(1)))
-    };
-    if view.snapshot.disk.volumes.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(" none found", theme.dim()))),
-            vols_inner,
-        );
-    } else if vol_rows > 0 && vols_inner.height > 0 {
-        let each = (vols_inner.height / vol_rows as u16).max(1);
-        let mut y = vols_inner.y;
-        for vol in view.snapshot.disk.volumes.iter().take(vol_rows) {
-            if y >= vols_inner.y.saturating_add(vols_inner.height) {
-                break;
-            }
-            let h = each.min(
-                vols_inner
-                    .y
-                    .saturating_add(vols_inner.height)
-                    .saturating_sub(y),
-            );
-            let slot = Rect {
-                x: vols_inner.x,
-                y,
-                width: vols_inner.width,
-                height: h,
-            };
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled(vol.name.clone(), theme.fg()),
-                    Span::styled(
-                        format!(
-                            "   {} / {}",
-                            bytes_short(vol.used_bytes),
-                            bytes_short(vol.total_bytes)
-                        ),
-                        theme.dim(),
-                    ),
-                ])),
-                Rect { height: 1, ..slot },
-            );
-            if slot.height >= 2 {
-                render_fill_bar(
-                    frame,
-                    Rect {
-                        y: slot.y.saturating_add(1),
-                        height: 1,
-                        ..slot
-                    },
-                    vol.ratio(),
-                    theme.disk,
-                );
-            }
-            y = y.saturating_add(h);
-        }
-    }
-
-    let right = rows_of(cols[1], &[1, 4]);
-    kv_cell(
-        frame,
-        right[0],
-        "activity",
-        &[
-            ("read", bytes_per_sec(view.snapshot.disk.read_bps)),
-            ("write", bytes_per_sec(view.snapshot.disk.write_bps)),
-        ],
-        theme.disk(),
-        theme,
-    );
-    let io = cols_of(right[1], &[1, 1]);
-    graph_cell(
-        frame,
-        io[0],
-        "read io",
-        view.disk_read_history,
-        theme.disk,
-        Thermal::Nominal,
-        theme,
-        Scale::Auto { floor: 1_024.0 },
-        Axis::Bytes,
-    );
-    graph_cell(
-        frame,
-        io[1],
-        "write io",
-        view.disk_write_history,
-        theme.disk,
-        Thermal::Nominal,
-        theme,
-        Scale::Auto { floor: 1_024.0 },
-        Axis::Bytes,
-    );
-}
-
-fn sensors(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
-    let fans = &view.snapshot.fans.fans;
-    let n = fans.len().min(4);
-    let plots = TempPlots {
-        package: view.snapshot.sensors.best_cpu_c().is_some() || !view.cpu_temp_history.is_empty(),
-        discrete: view.snapshot.sensors.gpu_c.is_some()
-            || view.snapshot.gpu.and_then(|g| g.temp_c).is_some()
-            || !view.gpu_temp_history.is_empty(),
-    };
-    let extras: Vec<(String, f32)> = view
-        .snapshot
-        .sensors
-        .readings
-        .iter()
-        .map(|r| (r.name.clone(), r.celsius))
-        .collect();
-    let show_readings = !extras.is_empty();
-    let graph_count = u16::from(plots.package) + u16::from(plots.discrete);
-
-    let mut row_w = Vec::new();
-    if n > 0 {
-        row_w.push(5_u16);
-    }
-    if graph_count > 0 || show_readings {
-        row_w.push(6);
-    }
-    if row_w.is_empty() {
-        return;
-    }
-    let rows = rows_of(area, &row_w);
-    let mut row = 0;
-    if n > 0 {
-        let cols = cols_of(rows[row], &vec![1; n]);
-        for (i, (fan, col)) in fans.iter().zip(cols.iter().copied()).enumerate() {
-            fan_cell(frame, col, fan, view.fan_histories.get(i), theme);
-        }
-        row += 1;
-    }
-    if row >= rows.len() {
-        return;
-    }
-    let bottom = rows[row];
-    match (graph_count > 0, show_readings) {
-        (true, true) => {
-            let cols = cols_of(bottom, &[3, 2]);
-            render_temp_graphs(frame, cols[0], view, plots, theme);
-            render_readings(frame, cols[1], &extras, theme);
-        }
-        (true, false) => {
-            render_temp_graphs(frame, bottom, view, plots, theme);
-        }
-        (false, true) => render_readings(frame, bottom, &extras, theme),
-        (false, false) => {}
-    }
-}
-
-#[derive(Clone, Copy)]
-struct TempPlots {
-    package: bool,
-    discrete: bool,
-}
-
-fn render_temp_graphs(
-    frame: &mut Frame,
-    area: Rect,
-    view: &AppView<'_>,
-    plots: TempPlots,
-    theme: &Theme,
-) {
-    match (plots.package, plots.discrete) {
-        (true, true) => {
-            let cols = cols_of(area, &[1, 1]);
-            graph_cell(
-                frame,
-                cols[0],
-                "cpu temp",
-                view.cpu_temp_history,
-                theme.temp,
-                view.snapshot.thermal,
-                theme,
-                Scale::TEMP,
-                Axis::Celsius,
-            );
-            graph_cell(
-                frame,
-                cols[1],
-                "gpu temp",
-                view.gpu_temp_history,
-                theme.gpu,
-                view.snapshot.thermal,
-                theme,
-                Scale::TEMP,
-                Axis::Celsius,
-            );
-        }
-        (true, false) => graph_cell(
-            frame,
-            area,
-            "cpu temp",
-            view.cpu_temp_history,
-            theme.temp,
-            view.snapshot.thermal,
-            theme,
-            Scale::TEMP,
-            Axis::Celsius,
-        ),
-        (false, true) => graph_cell(
-            frame,
-            area,
-            "gpu temp",
-            view.gpu_temp_history,
-            theme.gpu,
-            view.snapshot.thermal,
-            theme,
-            Scale::TEMP,
-            Axis::Celsius,
-        ),
-        (false, false) => {}
-    }
-}
-
-fn fan_cell(
-    frame: &mut Frame,
-    area: Rect,
+    cell: &crate::widgets::grid::Placed,
     fan: &plottypus_core::FanMetric,
     history: Option<&History>,
     theme: &Theme,
 ) {
-    let inner = cell(frame, area, &fan.name, theme);
-    let show_graph = history.is_some_and(|h| !h.is_empty()) && inner.height >= 3;
-    let parts = if show_graph {
-        rows_of(inner, &[1, 4])
+    let name = if fan.name.is_empty() {
+        "fan"
     } else {
-        vec![inner]
+        fan.name.as_str()
     };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!("{} rpm", fan.rpm),
-            big(theme),
-        ))),
-        parts[0],
-    );
-    if show_graph
-        && let Some(history) = history
-        && parts.len() > 1
-    {
+    let value = format!("{} rpm", fan.rpm);
+    let inner = cell_titled(frame, cell.rect, name, Some(&value), false, theme);
+    if let Some(history) = history.filter(|h| !h.is_empty()) {
         render_scaled_graph(
             frame,
-            parts[1],
+            inner,
             Graph {
                 history,
                 accent: theme.fan,
@@ -953,14 +985,71 @@ fn fan_cell(
             },
         );
     }
-    bar_at_bottom(frame, inner, fan.ratio(), theme.fan);
+    if inner.height > 0 {
+        render_fill_bar(
+            frame,
+            Rect {
+                x: inner.x,
+                y: inner.y.saturating_add(inner.height.saturating_sub(1)),
+                width: inner.width,
+                height: 1,
+            },
+            fan.ratio(),
+            theme.fan,
+        );
+    }
 }
 
-fn render_readings(frame: &mut Frame, area: Rect, extras: &[(String, f32)], theme: &Theme) {
-    let list_inner = cell(frame, area, "readings", theme);
+fn paint_volumes(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
+    let inner = cell_titled(frame, area, "volumes", None, false, theme);
+    let mut y = inner.y;
+    for vol in &view.snapshot.disk.volumes {
+        if y >= inner.y.saturating_add(inner.height) {
+            break;
+        }
+        let line = Rect {
+            x: inner.x,
+            y,
+            width: inner.width,
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(vol.name.clone(), theme.fg()),
+                Span::styled(
+                    format!(
+                        "  {} / {}",
+                        bytes_short(vol.used_bytes),
+                        bytes_short(vol.total_bytes)
+                    ),
+                    theme.dim(),
+                ),
+            ])),
+            line,
+        );
+        y = y.saturating_add(1);
+        if y < inner.y.saturating_add(inner.height) {
+            render_fill_bar(
+                frame,
+                Rect {
+                    x: inner.x,
+                    y,
+                    width: inner.width,
+                    height: 1,
+                },
+                vol.ratio(),
+                theme.disk,
+            );
+            y = y.saturating_add(1);
+        }
+    }
+}
+
+fn paint_readings(frame: &mut Frame, area: Rect, extras: &[(String, f32)], theme: &Theme) {
+    let inner = cell_titled(frame, area, "readings", None, false, theme);
     let lines: Vec<Line<'static>> = extras
         .iter()
-        .take(usize::from(list_inner.height))
+        .take(usize::from(inner.height))
         .map(|(name, c)| {
             Line::from(Span::styled(
                 format!(" {name}  {c:.0}°"),
@@ -968,7 +1057,211 @@ fn render_readings(frame: &mut Frame, area: Rect, extras: &[(String, f32)], them
             ))
         })
         .collect();
-    frame.render_widget(Paragraph::new(lines), list_inner);
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn paint_mem_part(
+    frame: &mut Frame,
+    cell: &crate::widgets::grid::Placed,
+    view: &AppView<'_>,
+    theme: &Theme,
+) {
+    let m = &view.snapshot.memory;
+    let (label, bytes) = match cell.id {
+        33 => ("wired", m.wired_bytes),
+        34 => ("compressed", m.compressed_bytes),
+        _ => (
+            "app",
+            m.used_bytes
+                .saturating_sub(m.wired_bytes)
+                .saturating_sub(m.compressed_bytes),
+        ),
+    };
+    let inner = cell_titled(
+        frame,
+        cell.rect,
+        label,
+        Some(&bytes_short(bytes)),
+        false,
+        theme,
+    );
+    let total = m.total_bytes;
+    let ratio = if total == 0 {
+        0.0
+    } else {
+        bytes as f32 / total as f32
+    };
+    if inner.height > 0 {
+        render_fill_bar(
+            frame,
+            Rect {
+                x: inner.x,
+                y: inner.y.saturating_add(inner.height.saturating_sub(1)),
+                width: inner.width,
+                height: 1,
+            },
+            ratio,
+            theme.mem,
+        );
+    }
+}
+
+fn outer_title(panel: Panel, view: &AppView<'_>, theme: &Theme) -> Line<'static> {
+    let mut spans = panel_title(panel.label(), theme).spans;
+    match panel {
+        Panel::Cpu => {
+            push_token(
+                &mut spans,
+                ready_pct(view.ready, view.snapshot.cpu.scaled),
+                theme.title(),
+            );
+            if let Some(w) = view.snapshot.cpu.watts.filter(|w| *w > 0.0) {
+                push_token(&mut spans, watts_display(w), theme.cpu());
+            }
+            if let Some(c) = view
+                .snapshot
+                .cpu
+                .temp_c
+                .or(view.snapshot.sensors.best_cpu_c())
+            {
+                push_token(&mut spans, format!("{c:.0}°"), theme.temp());
+            }
+            if !view.snapshot.thermal.is_nominal() {
+                push_token(
+                    &mut spans,
+                    thermal_word(view.snapshot.thermal).to_owned(),
+                    theme.thermal(view.snapshot.thermal),
+                );
+            }
+            if view.ready && (view.snapshot.cpu.scaled - view.snapshot.cpu.active).abs() > 0.01 {
+                push_token(
+                    &mut spans,
+                    format!("busy {}", percent_display(view.snapshot.cpu.active)),
+                    theme.dim(),
+                );
+            }
+        }
+        Panel::Gpu => {
+            if let Some(gpu) = view.snapshot.gpu {
+                push_token(&mut spans, ready_pct(view.ready, gpu.scaled), theme.title());
+                if let Some(w) = gpu.watts.filter(|w| *w > 0.0) {
+                    push_token(&mut spans, watts_display(w), theme.gpu());
+                }
+                if let Some(c) = gpu.temp_c.or(view.snapshot.sensors.gpu_c) {
+                    push_token(&mut spans, format!("{c:.0}°"), theme.temp());
+                }
+            }
+        }
+        Panel::Fans => {
+            if let Some(c) = view.snapshot.sensors.best_cpu_c() {
+                push_token(&mut spans, format!("{c:.0}°"), theme.temp());
+            }
+            if let Some(rpm) = peak_fan(view) {
+                push_token(&mut spans, format!("{rpm} rpm"), theme.title());
+            }
+        }
+        Panel::Mem => {
+            let m = &view.snapshot.memory;
+            push_token(&mut spans, bytes_short(m.used_bytes), theme.title());
+            spans.push(Span::styled(" / ", theme.dim()));
+            spans.push(Span::styled(bytes_short(m.total_bytes), theme.title()));
+            if m.pressure != Pressure::Nominal {
+                push_token(&mut spans, String::from("●"), theme.pressure(m.pressure));
+            }
+        }
+        Panel::Net => {
+            push_token(
+                &mut spans,
+                format!("↓ {}", bits_per_sec(view.snapshot.network.rx_bps)),
+                theme.net(),
+            );
+            push_token(
+                &mut spans,
+                format!("↑ {}", bits_per_sec(view.snapshot.network.tx_bps)),
+                theme.net(),
+            );
+        }
+        Panel::Disk => {
+            push_token(
+                &mut spans,
+                format!("↓ {}", bytes_per_sec(view.snapshot.disk.read_bps)),
+                theme.disk(),
+            );
+            push_token(
+                &mut spans,
+                format!("↑ {}", bytes_per_sec(view.snapshot.disk.write_bps)),
+                theme.disk(),
+            );
+        }
+        Panel::Processes => {}
+    }
+    Line::from(spans)
+}
+
+fn has_cluster(view: &AppView<'_>, kind: ClusterKind) -> bool {
+    let named = match kind {
+        ClusterKind::Efficiency => view.snapshot.cpu.e_cluster.is_some(),
+        ClusterKind::Performance => view.snapshot.cpu.p_cluster.is_some(),
+        ClusterKind::Super => view.snapshot.cpu.s_cluster.is_some(),
+    };
+    named || view.snapshot.cpu.cores.iter().any(|c| c.kind == kind)
+}
+
+fn cluster_load(view: &AppView<'_>, kind: ClusterKind) -> f32 {
+    let from = match kind {
+        ClusterKind::Efficiency => view.snapshot.cpu.e_cluster.as_ref().map(|c| c.scaled),
+        ClusterKind::Performance => view.snapshot.cpu.p_cluster.as_ref().map(|c| c.scaled),
+        ClusterKind::Super => view.snapshot.cpu.s_cluster.as_ref().map(|c| c.scaled),
+    };
+    if let Some(load) = from {
+        return load;
+    }
+    let mut sum = 0.0;
+    let mut n = 0_u32;
+    for core in &view.snapshot.cpu.cores {
+        if core.kind == kind {
+            sum += core.scaled;
+            n += 1;
+        }
+    }
+    if n == 0 { 0.0 } else { sum / n as f32 }
+}
+
+fn zone_value(view: &AppView<'_>, kind: ClusterKind) -> Option<String> {
+    view.snapshot
+        .sensors
+        .zone_temp(kind)
+        .or_else(|| view.zone_temp_history(kind).last())
+        .map(|c| format!("{c:.0}°"))
+}
+
+fn strip_value(view: &AppView<'_>, kind: ClusterKind) -> String {
+    percent_display(cluster_load(view, kind))
+}
+
+fn peak_fan(view: &AppView<'_>) -> Option<u16> {
+    view.snapshot
+        .fans
+        .fans
+        .iter()
+        .map(|f| f.rpm)
+        .max()
+        .filter(|r| *r > 0)
+}
+
+fn extra_readings(view: &AppView<'_>) -> Vec<(String, f32)> {
+    view.snapshot
+        .sensors
+        .readings
+        .iter()
+        .filter(|r| {
+            !matches!(
+                r.name.as_str(),
+                "cpu" | "gpu" | "efficiency" | "performance" | "super"
+            )
+        })
+        .map(|r| (r.name.clone(), r.celsius))
+        .collect()
 }
 
 fn ready_pct(ready: bool, ratio: f32) -> String {
@@ -979,27 +1272,11 @@ fn ready_pct(ready: bool, ratio: f32) -> String {
     }
 }
 
-fn freq_label(mhz: u32) -> String {
-    if mhz >= 1000 {
-        format!("{:.1}GHz", f64::from(mhz) / 1000.0)
-    } else {
-        format!("{mhz}MHz")
-    }
-}
-
 fn thermal_word(thermal: Thermal) -> &'static str {
     match thermal {
-        Thermal::Nominal => "nominal",
+        Thermal::Nominal => "",
         Thermal::Fair => "fair",
         Thermal::Serious => "serious",
         Thermal::Critical => "critical",
-    }
-}
-
-fn pressure_word(pressure: Pressure) -> &'static str {
-    match pressure {
-        Pressure::Nominal => "nominal",
-        Pressure::Warn => "warn",
-        Pressure::Critical => "critical",
     }
 }

@@ -33,18 +33,21 @@ Panel order is fixed everywhere: `cpu · gpu · mem · net · disk · sens · pr
 Enter expands it, Esc returns home.
 
 A cell or graph is drawn only when the snapshot has a real value. Missing Option metrics
-(`watts`, live MHz, ANE, zone °C, GPU die temp) stay off the board. History rings never
-receive `0.0` for a missing sample. Per-process GPU is not collected on macOS and is not
-shown. Disk compact/expanded graphs are I/O bytes, not the near-static used-ratio.
+(`watts`, live MHz, ANE, GPU die temp) stay off the board. Zone °C (`e`/`p`/`s`) are first-class
+on compact SENS and on expanded CPU/SENS, labeled as zones, never as per-core die temps.
+History rings never receive `0.0` for a missing sample. Per-process GPU is not collected
+on macOS and is not shown. Disk compact/expanded graphs are I/O bytes, not the near-static
+used-ratio. Tab / ← → while expanded hops the related family (`cpu ↔ gpu ↔ sens`,
+`net ↔ disk`, `mem ↔ proc`).
 
 | Panel | Compact | Expanded | Graph |
 | --- | --- | --- | --- |
-| cpu | % + busy (if scaled≠active) + °C + thermal word + SoC spec | load, power/clock/temp only if present, load + temp graphs, cluster bars, cores if `show_cores` | load auto (10% floor); package °C band |
-| gpu | % + °C + watts if present + core count | util, power/ANE/clock/temp/cores only if present | util auto (10% floor); temp band |
-| mem | used/total + pressure + wired/compr/cache/swap | used, swap/cache if nonzero, composition bars | used % fixed 0–100 |
-| net | iface ↓ ↑ | down / up cells | rx + tx bits, auto scale |
-| disk | volume used/total bar + R/W | volume bars + activity + split read/write | I/O bytes, auto scale |
-| sens | named zone/package °C + fan RPM | per-fan RPM graph, cpu/gpu temp band graphs, readings list | fans RPM auto; temps band |
+| cpu | % + busy (if scaled≠active) + °C + thermal word + SoC spec | overall + cluster load graphs, zone °C graphs, live cluster bars, cores if room | load auto (10% floor); zone/package °C band |
+| gpu | % + °C + watts if present + core count | util + die °C graphs; related CPU/SENS sparks | util auto (10% floor); temp band |
+| mem | used/total + pressure + spark when inner ≥ 2; specs follow Degrade | used graph, composition bars, hop to proc | used % fixed 0–100 |
+| net | iface ↓ ↑ | down / up graphs; hop to disk | rx + tx bits, auto scale |
+| disk | volume used/total bar + R/W | read/write I/O graphs + volumes; hop to net | I/O bytes, auto scale |
+| sens | named zone °C + fan RPM + spark when inner ≥ 2 (Glance stays numbers) | zone + package + GPU °C graphs, per-fan RPM, related CPU/GPU sparks | fans RPM auto; temps band |
 | proc | pid name cpu% mem (+ threads) | same table + dossier (identity, live, command, cpu spark, family) | per-pid cpu spark in dossier |
 
 ## 3. Component hierarchy
@@ -53,16 +56,16 @@ shown. Disk compact/expanded graphs are I/O bytes, not the near-static used-rati
 Surface (Work | Glance)
 └── Panel (bordered, titled, ↗ / × corner mark, focus ring on border color)
     ├── compact view   — title tokens + graph + optional subline
-    └── expanded view  — Grid of Cells (macmon-style)
-        ├── stat band   : 3–4 titled cells, one line each
-        ├── graph band  : full-width or split bordered graphs
-        └── detail band : cluster / composition / fan cells with bottom-anchored bars
+    └── expanded view  — `grid::pack` of graph-first cells
+        ├── usage / zone graphs : title carries the live number
+        ├── related sparks      : hoppable (`→`)
+        └── cluster / list      : bars, mosaics, volumes
 Footer (contextual verbs only)   Overlays (help, settings, kill confirm, process detail)
 ```
 
 Primitives live in `crates/plottypus-ui/src/chrome.rs`: `panel_block`, `panel_title`,
-`push_token`, `push_kv`, `Graph { .. }` + `render_scaled_graph`, `render_fill_bar`.
-Cells live in `widgets/expanded.rs::cell`. Nothing draws raw borders outside these two files.
+`push_token`, `push_kv`, `cell_titled`, `Graph { .. }` + `render_scaled_graph`, `render_fill_bar`.
+Expanded geometry lives in `widgets/grid.rs`. Nothing draws raw borders outside chrome.
 
 ## 4. Layout algebra
 
@@ -70,8 +73,8 @@ Cells live in `widgets/expanded.rs::cell`. Nothing draws raw borders outside the
 - **Work gate:** 60 cols × 16 rows (24 proc + 36 metrics); below it, Glance — never squeeze.
 - **Process share:** default 55%, clamp 35..72 (`PROC_RATIO_*` in core), drag-resizable.
 - **Degrade ladder:** `Full → Tight → Minimal` from left-rail width × body height.
-  Hide order: cores grid → zone graphs → mem specs → fans graph → mid-row graphs → spec lines.
-  Never wrap text, never collide meters. Expanded views never degrade.
+  Hide order: spec lines follow Degrade; graphs follow **panel inner height**
+  (≥5 tall braille, 2–4 spark, 1 headline). Expanded views reflow via `grid::pack`.
 - **Slack policy:** leftover vertical space goes to the current hero (Work: cpu/gpu row;
   Glance: the cpu panel unions the fill row directly beneath it).
 - Rows use odd heights (3/5/7) so rounded borders stay symmetric top and bottom.
@@ -152,9 +155,11 @@ series gold, Serious/Critical red. Selection highlight is the one permitted back
   commands flow down `mpsc` (`Interval/Paused/Quit`), `Result<Snapshot>` flows up. FFI latency
   can never stall a frame.
 - **Draw cadence:** the event loop redraws once per interval tick or on input; ratatui diffs
-  against the previous buffer so quiet frames cost ~nothing.
-- **History:** 900-sample rings (~15 min at 1 s), downsampled to `2 × width` buckets in the draw
-  path, drawn bottom-fill braille with a small-value bias so 2% still lights a dot.
+  against the previous buffer so quiet frames cost ~nothing. Cheap collectors default to 250 ms;
+  processes 1 s; HID/SMC 2 s. No tweening.
+- **History:** cheap series are 3600-sample rings (~15 min at 250 ms). Draw path uses
+  `downsample_shaped`: right half last-value, left half peak. Temps/fans stay 900 at the sensor
+  clock. Bottom-fill braille with a small-value bias so 2% still lights a dot.
 - **Verification:** every layout change gets eyeballed through the ignored
   `visual_dump::dump_all_expanded` test (ASCII frames of every expanded panel), plus pty runs at
   boundary sizes (61×16, 60×24) checking boot/render/quit and a size-sweep test that replans and

@@ -154,8 +154,8 @@ fn map_normal_key(key: KeyEvent) -> Option<Event> {
         KeyCode::Char('n') => Some(Event::ConfirmNo),
         KeyCode::Char('[' | ']') => Some(Event::CycleInterval),
         KeyCode::Char('f') => Some(Event::Freeze),
-        KeyCode::Tab => Some(Event::NextPanel),
-        KeyCode::BackTab => Some(Event::PrevPanel),
+        KeyCode::Tab | KeyCode::Right => Some(Event::NextPanel),
+        KeyCode::BackTab | KeyCode::Left => Some(Event::PrevPanel),
         KeyCode::Enter => Some(Event::Expand),
         KeyCode::Backspace => Some(Event::FilterBackspace),
         _ => None,
@@ -220,6 +220,14 @@ mod tests {
         assert_eq!(
             map_key_in_mode(KeyEvent::from(KeyCode::Enter), modes(false, false)),
             Some(Event::Expand)
+        );
+        assert_eq!(
+            map_key_in_mode(KeyEvent::from(KeyCode::Right), modes(false, false)),
+            Some(Event::NextPanel)
+        );
+        assert_eq!(
+            map_key_in_mode(KeyEvent::from(KeyCode::Left), modes(false, false)),
+            Some(Event::PrevPanel)
         );
     }
 

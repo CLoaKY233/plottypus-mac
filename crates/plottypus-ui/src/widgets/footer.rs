@@ -34,6 +34,7 @@ fn footer_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
         key(&mut spans, theme, "i", "interrupt");
         key(&mut spans, theme, "esc", "close");
     } else if view.expanded.is_some() {
+        key(&mut spans, theme, "tab", "related");
         key(&mut spans, theme, "esc", "home");
     } else {
         key(&mut spans, theme, "?", "help");

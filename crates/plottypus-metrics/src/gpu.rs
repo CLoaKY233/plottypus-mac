@@ -1,13 +1,34 @@
 use plottypus_core::GpuSnapshot;
 
-pub(crate) fn sample() -> Option<GpuSnapshot> {
+pub(crate) struct GpuCollector {
     #[cfg(target_os = "macos")]
-    {
-        macos::sample()
+    ports: Vec<u32>,
+}
+
+impl GpuCollector {
+    pub(crate) fn new() -> Self {
+        Self {
+            #[cfg(target_os = "macos")]
+            ports: Vec::new(),
+        }
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        None
+
+    pub(crate) fn sample(&mut self) -> Option<GpuSnapshot> {
+        #[cfg(target_os = "macos")]
+        {
+            macos::sample(&mut self.ports)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for GpuCollector {
+    fn drop(&mut self) {
+        macos::release_ports(&mut self.ports);
     }
 }
 
@@ -58,33 +79,62 @@ mod macos {
     const K_CF_NUMBER_FLOAT64: i32 = 6;
     const K_CF_NUMBER_SINT32: i32 = 3;
 
-    pub(super) fn sample() -> Option<GpuSnapshot> {
+    pub(super) fn release_ports(ports: &mut Vec<u32>) {
+        for port in ports.drain(..) {
+            unsafe {
+                // SAFETY: each port was retained by IOIteratorNext and is still owned here.
+                IOObjectRelease(port);
+            }
+        }
+    }
+
+    fn rematch(ports: &mut Vec<u32>) {
+        release_ports(ports);
         let matching = unsafe { IOServiceMatching(c"IOAccelerator".as_ptr()) };
         if matching.is_null() {
-            return None;
+            return;
         }
         let mut iter: u32 = 0;
         let kr = unsafe { IOServiceGetMatchingServices(0, matching, &raw mut iter) };
         if kr != 0 {
-            return None;
+            return;
         }
-        let mut best: Option<f32> = None;
         loop {
             let service = unsafe { IOIteratorNext(iter) };
             if service == 0 {
                 break;
             }
-            if let Some(util) = util_for_service(service) {
-                best = Some(best.map_or(util, |b| b.max(util)));
-            }
-            unsafe { IOObjectRelease(service) };
+            ports.push(service);
         }
-        unsafe { IOObjectRelease(iter) };
+        unsafe {
+            IOObjectRelease(iter);
+        }
+    }
+
+    pub(super) fn sample(ports: &mut Vec<u32>) -> Option<GpuSnapshot> {
+        if ports.is_empty() {
+            rematch(ports);
+        }
+        let mut best = max_util(ports);
+        if best.is_none() {
+            rematch(ports);
+            best = max_util(ports);
+        }
         best.filter(|v| *v >= 0.0).map(|v| GpuSnapshot {
             scaled: (v / 100.0).clamp(0.0, 1.0),
             active: (v / 100.0).clamp(0.0, 1.0),
             ..GpuSnapshot::default()
         })
+    }
+
+    fn max_util(ports: &[u32]) -> Option<f32> {
+        let mut best: Option<f32> = None;
+        for &service in ports {
+            if let Some(util) = util_for_service(service) {
+                best = Some(best.map_or(util, |b| b.max(util)));
+            }
+        }
+        best
     }
 
     fn util_for_service(service: u32) -> Option<f32> {

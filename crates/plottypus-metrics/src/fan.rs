@@ -2,6 +2,7 @@ use plottypus_core::{FanSnapshot, SensorsSnapshot};
 
 pub(crate) struct FanCollector {
     inner: Inner,
+    hid: crate::hid::HidClient,
 }
 
 enum Inner {
@@ -16,12 +17,14 @@ impl FanCollector {
         {
             Self {
                 inner: macos::Client::open().map_or(Inner::Empty, Inner::Mac),
+                hid: crate::hid::HidClient::new(),
             }
         }
         #[cfg(not(target_os = "macos"))]
         {
             Self {
                 inner: Inner::Empty,
+                hid: crate::hid::HidClient::new(),
             }
         }
     }
@@ -40,7 +43,7 @@ impl FanCollector {
             Inner::Mac(client) => client.sample_sensors(),
             Inner::Empty => SensorsSnapshot::default(),
         };
-        let hid = crate::hid::sample_temps();
+        let hid = self.hid.sample();
         crate::zones::merge_sensors(smc, &hid)
     }
 }

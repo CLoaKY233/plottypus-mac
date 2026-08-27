@@ -9,7 +9,7 @@ use crate::chrome::{
     Axis, Graph, GraphInk, panel_block, panel_title, push_token, render_scaled_graph,
 };
 
-use crate::layout::{Degrade, Panel};
+use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
 use plottypus_core::Scale;
@@ -37,7 +37,7 @@ fn render_compact(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &The
         return;
     }
     let graph = compact_temp_history(view);
-    if area.height < 2 || view.degrade != Degrade::Full || graph.is_none() {
+    if area.height < 2 || graph.is_none() {
         render_headline(frame, area, &named, fans, theme);
         return;
     }
@@ -51,9 +51,9 @@ fn render_compact(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &The
                 history,
                 accent: theme.temp,
                 theme,
-                scale: Scale::Fixed(100.0),
-                axis: Axis::None,
-                ink: GraphInk::Load(view.snapshot.thermal),
+                scale: Scale::TEMP,
+                axis: Axis::Celsius,
+                ink: GraphInk::Flat,
             },
         );
     }

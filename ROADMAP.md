@@ -45,6 +45,15 @@ Found in hands-on review against the running binary; each has a regression test 
 - [x] Tree view from `ppid`.
 - [x] Search matches pids too; highlight matches.
 
+## Phase 3.5 — Cockpit / expanded rewrite
+
+- [x] Graph/spark visibility follows panel inner height (80×24 Work SENS/MEM keep a spark).
+- [x] Shaped downsample (last-value recent, peak older) on braille and sparks.
+- [x] 250 ms cheap collectors; cached GPU/disk ports; reused HID client; 1 s procs; 2 s sensors.
+- [x] Expanded packer (`grid::pack`) + graph-first cells. No empty stat cathedrals.
+- [x] Cluster load histories + zone °C graphs on CPU and SENS (never labeled per-core).
+- [x] Related-family hops (Tab / ← → / click `→`).
+
 ## Phase 3 — Layout pass
 
 - [x] Expanded views rebuilt as macmon-style grids: every metric and graph lives in its own

@@ -16,22 +16,50 @@ const SKIP_MOUNT_PREFIXES: &[&str] = &[
 
 pub(crate) struct DiskCollector {
     prev: Option<(Instant, u64, u64)>,
+    volumes: Vec<DiskVolume>,
+    #[cfg(target_os = "macos")]
+    ports: Vec<u32>,
 }
 
 impl DiskCollector {
     pub(crate) fn new() -> Self {
-        Self { prev: None }
+        Self {
+            prev: None,
+            volumes: Vec::new(),
+            #[cfg(target_os = "macos")]
+            ports: Vec::new(),
+        }
+    }
+
+    pub(crate) fn refresh_volumes(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            self.volumes = macos::volumes();
+        }
     }
 
     pub(crate) fn sample(&mut self) -> DiskSnapshot {
+        if self.volumes.is_empty() {
+            self.refresh_volumes();
+        }
         #[cfg(target_os = "macos")]
         {
             macos::sample(self)
         }
         #[cfg(not(target_os = "macos"))]
         {
-            DiskSnapshot::default()
+            DiskSnapshot {
+                volumes: self.volumes.clone(),
+                ..DiskSnapshot::default()
+            }
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for DiskCollector {
+    fn drop(&mut self) {
+        macos::release_ports(&mut self.ports);
     }
 }
 
@@ -138,9 +166,41 @@ mod macos {
     const K_CF_NUMBER_SINT64: i32 = 4;
     const K_CF_NUMBER_FLOAT64: i32 = 6;
 
+    pub(super) fn release_ports(ports: &mut Vec<u32>) {
+        for port in ports.drain(..) {
+            unsafe {
+                // SAFETY: each port was retained by IOIteratorNext and is still owned here.
+                IOObjectRelease(port);
+            }
+        }
+    }
+
+    fn rematch(ports: &mut Vec<u32>) {
+        release_ports(ports);
+        let matching = unsafe { IOServiceMatching(c"IOBlockStorageDriver".as_ptr()) };
+        if matching.is_null() {
+            return;
+        }
+        let mut iter: u32 = 0;
+        let kr = unsafe { IOServiceGetMatchingServices(0, matching, &raw mut iter) };
+        if kr != 0 {
+            return;
+        }
+        loop {
+            let service = unsafe { IOIteratorNext(iter) };
+            if service == 0 {
+                break;
+            }
+            ports.push(service);
+        }
+        unsafe {
+            IOObjectRelease(iter);
+        }
+    }
+
     pub(super) fn sample(col: &mut DiskCollector) -> DiskSnapshot {
-        let volumes = volumes();
-        let (read, write) = io_bytes();
+        let volumes = col.volumes.clone();
+        let (read, write) = io_bytes(&mut col.ports);
         let now = Instant::now();
         let (read_bps, write_bps) = if let Some((t0, r0, w0)) = col.prev {
             let dt = now.saturating_duration_since(t0).as_secs_f64().max(0.001);
@@ -159,7 +219,7 @@ mod macos {
         }
     }
 
-    fn volumes() -> Vec<DiskVolume> {
+    pub(super) fn volumes() -> Vec<DiskVolume> {
         let mut buf: *mut libc::statfs = ptr::null_mut();
         let n = unsafe {
             // SAFETY: `buf` is an out-pointer; getmntinfo writes a libc-owned array.
@@ -209,30 +269,29 @@ mod macos {
         String::from_utf8_lossy(&bytes).into_owned()
     }
 
-    fn io_bytes() -> (u64, u64) {
-        let matching = unsafe { IOServiceMatching(c"IOBlockStorageDriver".as_ptr()) };
-        if matching.is_null() {
-            return (0, 0);
-        }
-        let mut iter: u32 = 0;
-        let kr = unsafe { IOServiceGetMatchingServices(0, matching, &raw mut iter) };
-        if kr != 0 {
-            return (0, 0);
+    fn io_bytes(ports: &mut Vec<u32>) -> (u64, u64) {
+        if ports.is_empty() {
+            rematch(ports);
         }
         let mut read = 0_u64;
         let mut write = 0_u64;
-        loop {
-            let service = unsafe { IOIteratorNext(iter) };
-            if service == 0 {
-                break;
-            }
+        let mut any = false;
+        for &service in ports.iter() {
             if let Some((r, w)) = bytes_for_service(service) {
+                any = true;
                 read = read.saturating_add(r);
                 write = write.saturating_add(w);
             }
-            unsafe { IOObjectRelease(service) };
         }
-        unsafe { IOObjectRelease(iter) };
+        if !any {
+            rematch(ports);
+            for &service in ports.iter() {
+                if let Some((r, w)) = bytes_for_service(service) {
+                    read = read.saturating_add(r);
+                    write = write.saturating_add(w);
+                }
+            }
+        }
         (read, write)
     }
 

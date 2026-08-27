@@ -6,8 +6,9 @@ use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use crate::theme::Theme;
 use crate::widgets::AppView;
 
-const HELP: [&str; 15] = [
+const HELP: [&str; 16] = [
     "tab / shift-tab          move between boxes",
+    "tab / ← →                related expand",
     "enter                    expand focused box",
     "esc                      close expand / help / search",
     "click ↗                  expand that box",
@@ -51,7 +52,7 @@ fn settings_lines(view: &AppView<'_>) -> Vec<String> {
     vec![
         String::from(" sampling"),
         format!(
-            "1  interval     {} ms   [ / ]  0.5 / 1 / 2 s",
+            "1  interval     {} ms   [ / ]  0.25 / 0.5 / 1 s",
             view.interval_ms
         ),
         String::new(),
