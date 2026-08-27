@@ -157,7 +157,7 @@ impl App {
             proc_ratio,
             dragging_split: false,
         };
-        match app.worker.snaps.recv_timeout(Duration::from_secs(2)) {
+        match app.worker.snaps.recv_timeout(Duration::from_secs(8)) {
             Ok(Ok(first)) => app.apply_snapshot(first),
             Ok(Err(err)) => return Err(err),
             Err(_) => {}

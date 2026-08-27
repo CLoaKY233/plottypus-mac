@@ -24,6 +24,8 @@ No Electron, no sysinfo-scraping, no `ps` shells-out. plottypus talks to macOS d
 
 Requires macOS on Apple Silicon and Rust 1.88+.
 
+Tagged releases attach `plottypus-<tag>-macos-aarch64.tar.gz` (and a Linux stub build) as GitHub Release assets.
+
 ```sh
 cargo install --git https://github.com/CLoaKY233/plottypus-mac
 ```

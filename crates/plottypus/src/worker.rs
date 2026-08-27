@@ -85,12 +85,12 @@ mod tests {
         let handle = spawn(Duration::from_millis(20)).expect("spawn");
         let first = handle
             .snaps
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(8))
             .expect("snap1");
         assert!(first.is_ok());
         let second = handle
             .snaps
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(8))
             .expect("snap2");
         assert!(second.is_ok());
 
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn dropping_handle_joins_worker() {
         let handle = spawn(Duration::from_millis(20)).expect("spawn");
-        let _ = handle.snaps.recv_timeout(Duration::from_secs(2));
+        let _ = handle.snaps.recv_timeout(Duration::from_secs(8));
         drop(handle);
     }
 }

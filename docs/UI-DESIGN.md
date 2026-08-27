@@ -75,8 +75,10 @@ Expanded geometry lives in `widgets/grid.rs`. Nothing draws raw borders outside 
 - **Degrade ladder:** `Full → Tight → Minimal` from left-rail width × body height.
   Hide order: spec lines follow Degrade; graphs follow **panel inner height**
   (≥5 tall braille, 2–4 spark, 1 headline). Expanded views reflow via `grid::pack`
-  plus `split_meta`. Leftover is shared across `take_leftover` bands so usage
-  and heat both grow; unused leftover always fills the pane.
+  plus `split_meta`. Wide expand (`inner.width ≥ 100`) parks hops, identity, and
+  per-core `%` in a **26-col left column**; graphs keep the remaining full height.
+  Narrow expand uses a bottom strip. Leftover is shared across `take_leftover`
+  bands so usage and heat both grow; unused leftover always fills the pane.
   Expanded cells are not required to be odd height.
 - **Slack policy:** leftover vertical space goes to the current hero (Work: cpu/gpu row;
   Glance: the cpu panel unions the fill row directly beneath it).

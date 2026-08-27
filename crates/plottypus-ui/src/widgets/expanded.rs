@@ -73,7 +73,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme, 
     let placed = pack(plan.main, &bands_for(panel, view));
     paint_pack(frame, &placed, view, theme, panel);
     if let Some(meta) = plan.meta {
-        paint_meta(frame, meta, panel, view, theme);
+        paint_meta(frame, meta, plan.side, panel, view, theme);
     }
 }
 
@@ -87,7 +87,7 @@ pub fn hop_hit(area: Rect, view: &AppView<'_>, col: u16, row: u16) -> Option<Pan
     let budget = meta_budget(panel, view);
     let plan = split_meta(inner, budget, panel_mins(panel, view));
     if let Some(meta) = plan.meta
-        && let Some(hit) = meta_hop_hit(meta, panel, view, col, row)
+        && let Some(hit) = meta_hop_hit(meta, plan.side, panel, view, col, row)
     {
         return Some(hit);
     }
@@ -137,10 +137,21 @@ impl MetaBudget {
     }
 }
 
+const META_COL_MIN_WIDTH: u16 = 100;
+const META_COL_WIDTH: u16 = 26;
+const META_COL_GAP: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetaSide {
+    Left,
+    Bottom,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MetaPlan {
     main: Rect,
     meta: Option<Rect>,
+    side: MetaSide,
 }
 
 fn split_meta(inner: Rect, budget: MetaBudget, panel_mins: u16) -> MetaPlan {
@@ -148,9 +159,30 @@ fn split_meta(inner: Rect, budget: MetaBudget, panel_mins: u16) -> MetaPlan {
         return MetaPlan {
             main: inner,
             meta: None,
+            side: MetaSide::Bottom,
         };
     }
     let hops_h = budget.hops_h();
+    let col_w = META_COL_WIDTH.saturating_add(META_COL_GAP);
+    if inner.width >= META_COL_MIN_WIDTH
+        && inner.width >= col_w.saturating_add(16)
+        && (budget.hops == HopStyle::Spark || budget.mosaic)
+        && inner.height >= hops_h.max(1)
+    {
+        return MetaPlan {
+            main: Rect {
+                x: inner.x.saturating_add(col_w),
+                width: inner.width.saturating_sub(col_w),
+                ..inner
+            },
+            meta: Some(Rect {
+                width: META_COL_WIDTH,
+                height: inner.height,
+                ..inner
+            }),
+            side: MetaSide::Left,
+        };
+    }
 
     let mut height = 0_u16;
     if budget.mosaic && inner.height >= panel_mins.saturating_add(hops_h).saturating_add(5) {
@@ -177,6 +209,7 @@ fn split_meta(inner: Rect, budget: MetaBudget, panel_mins: u16) -> MetaPlan {
         return MetaPlan {
             main: inner,
             meta: None,
+            side: MetaSide::Bottom,
         };
     }
     let main_h = inner.height.saturating_sub(height);
@@ -191,6 +224,7 @@ fn split_meta(inner: Rect, budget: MetaBudget, panel_mins: u16) -> MetaPlan {
             width: inner.width,
             height,
         }),
+        side: MetaSide::Bottom,
     }
 }
 
@@ -732,7 +766,27 @@ fn hop_targets(panel: Panel, view: &AppView<'_>) -> Vec<(u8, Panel)> {
     }
 }
 
-fn paint_meta(frame: &mut Frame, area: Rect, panel: Panel, view: &AppView<'_>, theme: &Theme) {
+fn paint_meta(
+    frame: &mut Frame,
+    area: Rect,
+    side: MetaSide,
+    panel: Panel,
+    view: &AppView<'_>,
+    theme: &Theme,
+) {
+    match side {
+        MetaSide::Left => paint_meta_left(frame, area, panel, view, theme),
+        MetaSide::Bottom => paint_meta_bottom(frame, area, panel, view, theme),
+    }
+}
+
+fn paint_meta_bottom(
+    frame: &mut Frame,
+    area: Rect,
+    panel: Panel,
+    view: &AppView<'_>,
+    theme: &Theme,
+) {
     if panel == Panel::Mem {
         paint_label_hop(frame, area, "proc", Panel::Processes, theme);
         return;
@@ -748,14 +802,19 @@ fn paint_meta(frame: &mut Frame, area: Rect, panel: Panel, view: &AppView<'_>, t
         3.min(area.height)
     };
     if hop_h > 0 {
-        let hop_area = Rect {
-            height: hop_h,
-            ..area
-        };
-        paint_hop_row(frame, hop_area, &hops, view, theme);
+        paint_hop_row(
+            frame,
+            Rect {
+                height: hop_h,
+                ..area
+            },
+            &hops,
+            view,
+            theme,
+        );
     }
     if view.show_cores && panel == Panel::Cpu && area.height > hop_h {
-        paint_mosaic(
+        paint_cores(
             frame,
             Rect {
                 y: area.y.saturating_add(hop_h),
@@ -766,6 +825,113 @@ fn paint_meta(frame: &mut Frame, area: Rect, panel: Panel, view: &AppView<'_>, t
             theme,
         );
     }
+}
+
+fn paint_meta_left(frame: &mut Frame, area: Rect, panel: Panel, view: &AppView<'_>, theme: &Theme) {
+    let hops = hop_targets(panel, view);
+    let hop_h = 3u16.saturating_mul(u16::try_from(hops.len()).unwrap_or(0));
+    let cores = view.show_cores && panel == Panel::Cpu && has_any_cluster(view);
+    let cores_min = if cores { 3 } else { 0 };
+    let keep = hop_h.saturating_add(cores_min);
+    let end = area.y.saturating_add(area.height);
+    let mut y = area.y;
+    for line in identity_lines(panel, view) {
+        if y.saturating_add(1).saturating_add(keep) > end {
+            break;
+        }
+        paint_dim_line(frame, area.x, y, area.width, line, theme);
+        y = y.saturating_add(1);
+    }
+    for (id, hop) in &hops {
+        if y.saturating_add(3) > end {
+            break;
+        }
+        paint_one_hop(
+            frame,
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 3,
+            },
+            *id,
+            *hop,
+            view,
+            theme,
+        );
+        y = y.saturating_add(3);
+    }
+    if cores && end.saturating_sub(y) >= 1 {
+        paint_cores(
+            frame,
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: end.saturating_sub(y),
+            },
+            view,
+            theme,
+        );
+    }
+}
+
+fn paint_dim_line(frame: &mut Frame, x: u16, y: u16, width: u16, text: String, theme: &Theme) {
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(text, theme.dim()))),
+        Rect {
+            x,
+            y,
+            width,
+            height: 1,
+        },
+    );
+}
+
+fn identity_lines(panel: Panel, view: &AppView<'_>) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !view.snapshot.soc.name.is_empty() && view.snapshot.soc.name != "unknown" {
+        lines.push(view.snapshot.soc.name.clone());
+    }
+    match panel {
+        Panel::Cpu => {
+            let e = view.snapshot.soc.e_cores;
+            let p = view.snapshot.soc.p_cores;
+            let s = view.snapshot.soc.s_cores;
+            if e > 0 || p > 0 || s > 0 {
+                let mut parts = Vec::new();
+                if e > 0 {
+                    parts.push(format!("{e}E"));
+                }
+                if p > 0 {
+                    parts.push(format!("{p}P"));
+                }
+                if s > 0 {
+                    parts.push(format!("{s}S"));
+                }
+                lines.push(parts.join(" + "));
+            }
+        }
+        Panel::Gpu => {
+            if let Some(gpu) = view.snapshot.gpu {
+                if let Some(mhz) = gpu.freq_mhz.filter(|mhz| *mhz > 0) {
+                    if mhz >= 1000 {
+                        lines.push(format!("{:.1}GHz", f64::from(mhz) / 1000.0));
+                    } else {
+                        lines.push(format!("{mhz}MHz"));
+                    }
+                }
+                if let Some(watts) = gpu.ane_watts.filter(|w| *w > 0.0) {
+                    lines.push(format!("ane {}", watts_display(watts)));
+                }
+            }
+            if view.snapshot.soc.gpu_cores > 0 {
+                lines.push(format!("{}c", view.snapshot.soc.gpu_cores));
+            }
+        }
+        _ => {}
+    }
+    lines
 }
 
 fn hop_row_rects(area: Rect, n: usize) -> Vec<Rect> {
@@ -886,7 +1052,14 @@ fn paint_label_hop(frame: &mut Frame, area: Rect, label: &str, _hop: Panel, them
     );
 }
 
-fn meta_hop_hit(area: Rect, panel: Panel, view: &AppView<'_>, col: u16, row: u16) -> Option<Panel> {
+fn meta_hop_hit(
+    area: Rect,
+    side: MetaSide,
+    panel: Panel,
+    view: &AppView<'_>,
+    col: u16,
+    row: u16,
+) -> Option<Panel> {
     if !rect_contains(area, col, row) {
         return None;
     }
@@ -897,19 +1070,44 @@ fn meta_hop_hit(area: Rect, panel: Panel, view: &AppView<'_>, col: u16, row: u16
     if hops.is_empty() {
         return None;
     }
-    let hop_h = 3.min(area.height);
-    if row >= area.y.saturating_add(hop_h) {
-        return None;
+    match side {
+        MetaSide::Bottom => {
+            let hop_h = 3.min(area.height);
+            if row >= area.y.saturating_add(hop_h) {
+                return None;
+            }
+            hop_row_hit(
+                Rect {
+                    height: hop_h,
+                    ..area
+                },
+                &hops,
+                col,
+                row,
+            )
+        }
+        MetaSide::Left => {
+            let hop_h = 3u16.saturating_mul(u16::try_from(hops.len()).unwrap_or(0));
+            let cores_min = if view.show_cores && panel == Panel::Cpu && has_any_cluster(view) {
+                3
+            } else {
+                0
+            };
+            let keep = hop_h.saturating_add(cores_min);
+            let mut y = area.y;
+            let end = area.y.saturating_add(area.height);
+            let n = u16::try_from(identity_lines(panel, view).len()).unwrap_or(0);
+            let fit = n.min(end.saturating_sub(y.saturating_add(keep)));
+            y = y.saturating_add(fit);
+            for (_, hop) in hops {
+                if row >= y && row < y.saturating_add(3) {
+                    return Some(hop);
+                }
+                y = y.saturating_add(3);
+            }
+            None
+        }
     }
-    hop_row_hit(
-        Rect {
-            height: hop_h,
-            ..area
-        },
-        &hops,
-        col,
-        row,
-    )
 }
 
 fn rect_contains(area: Rect, col: u16, row: u16) -> bool {
@@ -919,49 +1117,64 @@ fn rect_contains(area: Rect, col: u16, row: u16) -> bool {
         && row < area.y.saturating_add(area.height)
 }
 
-fn paint_mosaic(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
+fn paint_cores(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let per_row = usize::from(area.width.saturating_sub(2).max(1)).min(8);
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    for kind in [
-        ClusterKind::Super,
-        ClusterKind::Performance,
-        ClusterKind::Efficiency,
-    ] {
-        let mut cores: Vec<CoreSample> = view
-            .snapshot
-            .cpu
-            .cores
-            .iter()
-            .copied()
-            .filter(|c| c.kind == kind)
-            .collect();
-        if cores.is_empty() {
-            continue;
-        }
-        cores.sort_by_key(|c| c.index);
-        for chunk in cores.chunks(per_row) {
-            let mut spans = vec![Span::styled(format!("{} ", kind.tag()), theme.dim())];
-            for core in chunk {
-                let level = ((core.scaled * 4.0).floor() as u8).min(4);
-                let glyph = crate::braille::braille_cell(level, level);
-                spans.push(Span::styled(
-                    glyph.to_string(),
-                    theme.stain(theme.cpu, core.scaled, view.snapshot.thermal),
-                ));
-            }
-            lines.push(Line::from(spans));
-            if lines.len() >= usize::from(area.height) {
-                break;
-            }
-        }
-        if lines.len() >= usize::from(area.height) {
+    let mut cores: Vec<CoreSample> = view.snapshot.cpu.cores.clone();
+    cores.sort_by_key(|c| (core_kind_rank(c.kind), c.index));
+    let end = area.y.saturating_add(area.height);
+    let mut y = area.y;
+    for core in cores {
+        if y >= end {
             break;
         }
+        let label = format!(
+            "{}{}  {}",
+            core.kind.tag(),
+            core.index,
+            percent_display(core.scaled)
+        );
+        let label_w = u16::try_from(label.chars().count())
+            .unwrap_or(0)
+            .min(area.width);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                label,
+                theme.stain(theme.cpu, core.scaled, view.snapshot.thermal),
+            ))),
+            Rect {
+                x: area.x,
+                y,
+                width: label_w,
+                height: 1,
+            },
+        );
+        let bar_x = area.x.saturating_add(label_w.saturating_add(1));
+        let bar_w = area.x.saturating_add(area.width).saturating_sub(bar_x);
+        if bar_w > 0 {
+            render_fill_bar(
+                frame,
+                Rect {
+                    x: bar_x,
+                    y,
+                    width: bar_w,
+                    height: 1,
+                },
+                core.scaled,
+                theme.cpu,
+            );
+        }
+        y = y.saturating_add(1);
     }
-    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn core_kind_rank(kind: ClusterKind) -> u8 {
+    match kind {
+        ClusterKind::Super => 0,
+        ClusterKind::Performance => 1,
+        ClusterKind::Efficiency => 2,
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1734,7 +1947,7 @@ mod tests {
     }
 
     #[test]
-    fn split_meta_never_opens_a_right_rail() {
+    fn split_meta_wide_opens_a_left_column() {
         let budget = super::MetaBudget {
             hops: super::HopStyle::Spark,
             mosaic: true,
@@ -1743,12 +1956,29 @@ mod tests {
             volumes: false,
         };
         let plan = super::split_meta(Rect::new(0, 0, 160, 40), budget, 9);
-        assert_eq!(plan.main.width, 160, "graphs keep the full width");
-        let meta = plan.meta.expect("bottom hops");
+        assert_eq!(plan.side, super::MetaSide::Left);
+        let meta = plan.meta.expect("left column");
         assert_eq!(meta.x, 0);
-        assert_eq!(meta.width, 160);
-        assert_eq!(meta.y, plan.main.height);
-        assert!(meta.height >= 3);
+        assert_eq!(meta.width, 26);
+        assert_eq!(meta.height, 40);
+        assert_eq!(plan.main.x, 27);
+        assert_eq!(plan.main.width, 133);
+        assert_eq!(plan.main.height, 40, "graphs keep the full height");
+    }
+
+    #[test]
+    fn split_meta_narrow_stays_a_bottom_strip() {
+        let budget = super::MetaBudget {
+            hops: super::HopStyle::Spark,
+            mosaic: true,
+            identity: false,
+            extras: false,
+            volumes: false,
+        };
+        let plan = super::split_meta(Rect::new(0, 0, 78, 21), budget, 9);
+        assert_eq!(plan.side, super::MetaSide::Bottom);
+        assert_eq!(plan.main.width, 78);
+        assert_eq!(plan.meta.map(|r| r.height), Some(8));
     }
 
     #[test]
@@ -1779,5 +2009,30 @@ mod tests {
         assert_eq!(usage.rect.height.saturating_add(zone.rect.height), 30);
         assert!(usage.rect.height >= 10, "got {}", usage.rect.height);
         assert!(zone.rect.height >= 10, "got {}", zone.rect.height);
+    }
+
+    #[test]
+    fn pack_gpu_shares_height_between_util_and_temp() {
+        use crate::widgets::grid::pack;
+        let mut fx = fixture("");
+        fx.snap.gpu = Some(plottypus_core::GpuSnapshot {
+            scaled: 0.16,
+            temp_c: Some(51.0),
+            ..plottypus_core::GpuSnapshot::default()
+        });
+        fx.snap.sensors.gpu_c = Some(51.0);
+        fx.gpu.push(0.16);
+        fx.gpu_temp.push(51.0);
+        let packed = pack(Rect::new(0, 0, 130, 30), &super::gpu_bands(&fx.view()));
+        let util = packed.get(super::ID_GPU_UTIL).expect("util");
+        let temp = packed.get(super::ID_GPU_TEMP).expect("temp");
+        assert_eq!(util.rect.height.saturating_add(temp.rect.height), 30);
+        let gap = util.rect.height.abs_diff(temp.rect.height);
+        assert!(
+            gap <= 1,
+            "util {} vs temp {}",
+            util.rect.height,
+            temp.rect.height
+        );
     }
 }

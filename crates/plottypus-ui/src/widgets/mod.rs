@@ -655,7 +655,11 @@ mod render_tests {
             assert!(text.contains(want), "missing {want}: {text}");
         }
         assert!(text.contains("busy 70%"), "{text}");
-        assert!(!text.contains("E0"), "mosaic is glyphs, not E0 81%: {text}");
+        assert!(
+            text.contains("E0"),
+            "per-core % belongs on CPU expand: {text}"
+        );
+        assert!(text.contains("20%"), "{text}");
         assert!(!text.contains("power"), "empty power cell: {text}");
         assert!(!text.contains("clock"), "empty clock cell: {text}");
         assert!(
@@ -663,6 +667,41 @@ mod render_tests {
             "other panels must hide: {text}"
         );
         assert!(!text.contains("Xcode"), "procs stay in their pane: {text}");
+    }
+
+    #[test]
+    fn expand_cpu_wide_lists_per_core_percent() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        fx.snap.gpu = Some(GpuSnapshot {
+            scaled: 0.16,
+            ..GpuSnapshot::default()
+        });
+        fx.snap.cpu.cores = vec![
+            CoreSample {
+                kind: ClusterKind::Super,
+                index: 0,
+                scaled: 0.81,
+                active: 0.81,
+            },
+            CoreSample {
+                kind: ClusterKind::Performance,
+                index: 0,
+                scaled: 0.44,
+                active: 0.44,
+            },
+        ];
+        fx.snap.sensors.s_c = Some(71.0);
+        fx.s_temp.push(71.0);
+        fx.s_load.push(0.81);
+        fx.p_load.push(0.44);
+        let text = paint(&fx.view(), 160, 40);
+        assert!(text.contains("S0"), "super core label: {text}");
+        assert!(text.contains("81%"), "{text}");
+        assert!(text.contains("P0"), "perf core label: {text}");
+        assert!(text.contains("44%"), "{text}");
+        assert!(text.contains("super"), "{text}");
+        assert!(text.contains("performance"), "{text}");
     }
 
     #[test]
@@ -1016,6 +1055,18 @@ mod render_tests {
             })
         });
         assert_eq!(hit, Some(Panel::Gpu), "a gpu hop cell must exist");
+
+        let wide = ratatui::layout::Rect::new(0, 0, 160, 40);
+        let wide_hit = (0..wide.height).find_map(|y| {
+            (0..26).find_map(|x| {
+                crate::widgets::hop_hit(wide, &view, x, y).filter(|p| *p == Panel::Gpu)
+            })
+        });
+        assert_eq!(
+            wide_hit,
+            Some(Panel::Gpu),
+            "wide expand parks hops in the left column"
+        );
     }
 
     #[test]
@@ -1074,7 +1125,10 @@ mod render_tests {
         fx.p_temp.push(51.0);
         let text = paint(&fx.view(), 80, 24);
         assert!(text.contains("perf zone"), "{text}");
-        assert!(!text.contains("P0"), "no second percentage strip: {text}");
+        assert!(
+            text.contains("P0"),
+            "live per-core % sits in the metadata region: {text}"
+        );
     }
 
     #[test]
