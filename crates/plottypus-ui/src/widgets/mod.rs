@@ -958,10 +958,46 @@ mod render_tests {
         fx.expanded = Some(Panel::Mem);
         let view = fx.view();
         let area = ratatui::layout::Rect::new(0, 0, 80, 23);
-        let hit = (0..area.height)
-            .rev()
-            .find_map(|y| (0..area.width).find_map(|x| crate::widgets::hop_hit(area, &view, x, y)));
+        let hit = (0..area.width).find_map(|x| crate::widgets::hop_hit(area, &view, x, 21));
         assert_eq!(hit, Some(Panel::Processes));
+        assert_eq!(
+            crate::widgets::hop_hit(area, &view, 2, 6),
+            None,
+            "clicks above the one-line hop must not jump"
+        );
+    }
+
+    #[test]
+    fn expand_cpu_no_double_cluster() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        fx.snap.cpu.cores = vec![CoreSample {
+            kind: ClusterKind::Performance,
+            index: 0,
+            scaled: 0.5,
+            active: 0.5,
+        }];
+        fx.snap.sensors.p_c = Some(51.0);
+        fx.p_temp.push(51.0);
+        let text = paint(&fx.view(), 80, 24);
+        assert!(text.contains("perf zone"), "{text}");
+        assert!(!text.contains("P0"), "no second percentage strip: {text}");
+    }
+
+    #[test]
+    fn expand_sens_keeps_extra_readings_on_wide() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Fans);
+        fx.snap.sensors.readings = vec![plottypus_core::TempReading {
+            name: String::from("nand"),
+            celsius: 38.0,
+        }];
+        let text = paint(&fx.view(), 160, 40);
+        assert!(
+            text.contains("nand"),
+            "extras belong on the right rail: {text}"
+        );
+        assert!(text.contains("38°"), "{text}");
     }
 
     #[test]

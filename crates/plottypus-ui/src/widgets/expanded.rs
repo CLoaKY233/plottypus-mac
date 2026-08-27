@@ -330,7 +330,7 @@ fn meta_budget(panel: Panel, view: &AppView<'_>) -> MetaBudget {
             mosaic: false,
             identity: false,
             extras: false,
-            volumes: view.show_net && !view.snapshot.disk.volumes.is_empty(),
+            volumes: !view.snapshot.disk.volumes.is_empty(),
         },
         Panel::Processes => MetaBudget {
             hops: HopStyle::Absent,
@@ -801,26 +801,44 @@ fn paint_meta_right(
     view: &AppView<'_>,
     theme: &Theme,
 ) {
+    let hops = hop_targets(panel, view);
+    let hop_h = 3u16.saturating_mul(u16::try_from(hops.len()).unwrap_or(0));
+    let label_h = u16::from(panel == Panel::Mem);
+    let mosaic = view.show_cores && panel == Panel::Cpu;
+    let mosaic_min = if mosaic { 3 } else { 0 };
+    let reserved = hop_h
+        .saturating_add(label_h)
+        .saturating_add(mosaic_min)
+        .min(area.height);
+    let facts_end = area.y.saturating_add(area.height.saturating_sub(reserved));
     let mut y = area.y;
-    let end = area.y.saturating_add(area.height);
     if panel == Panel::Cpu || panel == Panel::Gpu {
         for line in identity_lines(view) {
-            if y >= end {
+            if y >= facts_end {
                 break;
             }
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(line, theme.dim()))),
-                Rect {
-                    x: area.x,
-                    y,
-                    width: area.width,
-                    height: 1,
-                },
+            paint_dim_line(frame, area.x, y, area.width, line, theme);
+            y = y.saturating_add(1);
+        }
+    }
+    if panel == Panel::Fans {
+        for (name, c) in extra_readings(view) {
+            if y >= facts_end {
+                break;
+            }
+            paint_dim_line(
+                frame,
+                area.x,
+                y,
+                area.width,
+                format!("{name}  {c:.0}°"),
+                theme,
             );
             y = y.saturating_add(1);
         }
     }
-    let hops = hop_targets(panel, view);
+    y = facts_end;
+    let end = area.y.saturating_add(area.height);
     for (id, hop) in &hops {
         if y.saturating_add(3) > end {
             break;
@@ -855,7 +873,7 @@ fn paint_meta_right(
         );
         y = y.saturating_add(1);
     }
-    if view.show_cores && panel == Panel::Cpu && end.saturating_sub(y) >= 3 {
+    if mosaic && end.saturating_sub(y) >= 3 {
         paint_mosaic(
             frame,
             Rect {
@@ -868,6 +886,18 @@ fn paint_meta_right(
             theme,
         );
     }
+}
+
+fn paint_dim_line(frame: &mut Frame, x: u16, y: u16, width: u16, text: String, theme: &Theme) {
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(text, theme.dim()))),
+        Rect {
+            x,
+            y,
+            width,
+            height: 1,
+        },
+    );
 }
 
 fn identity_lines(view: &AppView<'_>) -> Vec<String> {
@@ -884,6 +914,41 @@ fn identity_lines(view: &AppView<'_>) -> Vec<String> {
     lines
 }
 
+fn hop_row_rects(area: Rect, n: usize) -> Vec<Rect> {
+    if n == 0 || area.width == 0 {
+        return Vec::new();
+    }
+    let constraints: Vec<Constraint> = (0..n).map(|_| Constraint::Fill(1)).collect();
+    Layout::horizontal(constraints).split(area).to_vec()
+}
+
+fn hop_row_hit(area: Rect, hops: &[(u8, Panel)], col: u16, row: u16) -> Option<Panel> {
+    if row < area.y || row >= area.y.saturating_add(area.height) {
+        return None;
+    }
+    hop_row_rects(area, hops.len())
+        .into_iter()
+        .zip(hops.iter())
+        .find(|(rect, _)| rect_contains(*rect, col, row))
+        .map(|(_, (_, panel))| *panel)
+}
+
+fn mem_label_hit(area: Rect, side: MetaSide, col: u16, row: u16) -> Option<Panel> {
+    let line = match side {
+        MetaSide::Bottom => Rect { height: 1, ..area },
+        MetaSide::Right => Rect {
+            y: area.y.saturating_add(area.height.saturating_sub(1)),
+            height: 1,
+            ..area
+        },
+    };
+    if rect_contains(line, col, row) {
+        Some(Panel::Processes)
+    } else {
+        None
+    }
+}
+
 fn paint_hop_row(
     frame: &mut Frame,
     area: Rect,
@@ -891,12 +956,7 @@ fn paint_hop_row(
     view: &AppView<'_>,
     theme: &Theme,
 ) {
-    if hops.is_empty() || area.width == 0 {
-        return;
-    }
-    let constraints: Vec<Constraint> = hops.iter().map(|_| Constraint::Fill(1)).collect();
-    let cols = Layout::horizontal(constraints).split(area);
-    for ((id, hop), col) in hops.iter().zip(cols.iter().copied()) {
+    for ((id, hop), col) in hops.iter().zip(hop_row_rects(area, hops.len())) {
         paint_one_hop(frame, col, *id, *hop, view, theme);
     }
 }
@@ -991,7 +1051,7 @@ fn meta_hop_hit(
         return None;
     }
     if panel == Panel::Mem {
-        return Some(Panel::Processes);
+        return mem_label_hit(area, side, col, row);
     }
     let hops = hop_targets(panel, view);
     if hops.is_empty() {
@@ -1003,15 +1063,21 @@ fn meta_hop_hit(
             if row >= area.y.saturating_add(hop_h) {
                 return None;
             }
-            let w = area.width / hops.len() as u16;
-            let idx = col.saturating_sub(area.x) / w.max(1);
-            hops.get(idx as usize).map(|(_, p)| *p)
+            let hop_area = Rect {
+                height: hop_h,
+                ..area
+            };
+            hop_row_hit(hop_area, &hops, col, row)
         }
         MetaSide::Right => {
-            let mut y = area.y;
-            if panel == Panel::Cpu || panel == Panel::Gpu {
-                y = y.saturating_add(u16::try_from(identity_lines(view).len()).unwrap_or(0));
-            }
+            let hop_h = 3u16.saturating_mul(u16::try_from(hops.len()).unwrap_or(0));
+            let mosaic_min = if view.show_cores && panel == Panel::Cpu {
+                3
+            } else {
+                0
+            };
+            let reserved = hop_h.saturating_add(mosaic_min).min(area.height);
+            let mut y = area.y.saturating_add(area.height.saturating_sub(reserved));
             for (_, hop) in hops {
                 if row >= y && row < y.saturating_add(3) {
                     return Some(hop);
@@ -1034,7 +1100,8 @@ fn paint_mosaic(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let mut spans = Vec::new();
+    let per_row = usize::from(area.width.saturating_sub(2).max(1)).min(8);
+    let mut lines: Vec<Line<'static>> = Vec::new();
     for kind in [
         ClusterKind::Super,
         ClusterKind::Performance,
@@ -1052,20 +1119,26 @@ fn paint_mosaic(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme
             continue;
         }
         cores.sort_by_key(|c| c.index);
-        if !spans.is_empty() {
-            spans.push(Span::raw("  "));
+        for chunk in cores.chunks(per_row) {
+            let mut spans = vec![Span::styled(format!("{} ", kind.tag()), theme.dim())];
+            for core in chunk {
+                let level = ((core.scaled * 4.0).floor() as u8).min(4);
+                let glyph = crate::braille::braille_cell(level, level);
+                spans.push(Span::styled(
+                    glyph.to_string(),
+                    theme.stain(theme.cpu, core.scaled, view.snapshot.thermal),
+                ));
+            }
+            lines.push(Line::from(spans));
+            if lines.len() >= usize::from(area.height) {
+                break;
+            }
         }
-        spans.push(Span::styled(format!("{} ", kind.tag()), theme.dim()));
-        for core in cores {
-            let level = ((core.scaled * 4.0).floor() as u8).min(4);
-            let glyph = crate::braille::braille_cell(level, level);
-            spans.push(Span::styled(
-                glyph.to_string(),
-                theme.stain(theme.cpu, core.scaled, view.snapshot.thermal),
-            ));
+        if lines.len() >= usize::from(area.height) {
+            break;
         }
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1263,7 +1336,13 @@ fn series_title(id: u8, view: &AppView<'_>) -> (&'static str, Option<String>) {
         ID_HOP_GPU => view.snapshot.gpu.map(|g| percent_display(g.scaled)),
         ID_NET_DOWN => Some(bits_per_sec(view.snapshot.network.rx_bps)),
         ID_NET_UP => Some(bits_per_sec(view.snapshot.network.tx_bps)),
-        ID_DISK_READ | ID_HOP_DISK => Some(bytes_per_sec(view.snapshot.disk.read_bps)),
+        ID_DISK_READ => Some(bytes_per_sec(view.snapshot.disk.read_bps)),
+        ID_HOP_DISK => Some(bytes_per_sec(
+            view.snapshot
+                .disk
+                .read_bps
+                .saturating_add(view.snapshot.disk.write_bps),
+        )),
         ID_DISK_WRITE => Some(bytes_per_sec(view.snapshot.disk.write_bps)),
         ID_MEM => Some(format!(
             "{} / {}",
