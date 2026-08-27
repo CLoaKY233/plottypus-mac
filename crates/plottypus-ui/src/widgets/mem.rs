@@ -49,25 +49,18 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     } else {
         0
     };
-    let rows = if spec_h > 0 {
-        Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Fill(1),
-            Constraint::Length(spec_h),
-        ])
-        .split(body)
-    } else if body.height >= 2 {
-        Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(body)
+    let (plot, spec_row) = if spec_h > 0 {
+        let rows = Layout::vertical([Constraint::Fill(1), Constraint::Length(spec_h)]).split(body);
+        (rows[0], Some(rows[1]))
     } else {
-        Layout::vertical([Constraint::Fill(1)]).split(body)
+        (body, None)
     };
 
     let ratio = mem_ratio(mem.used_bytes, mem.total_bytes);
-    render_fill_bar(frame, rows[0], ratio, theme.mem);
-    if rows.len() > 1 {
+    if plot.height >= 2 {
         render_scaled_graph(
             frame,
-            rows[1],
+            plot,
             Graph {
                 history: view.mem_history,
                 accent: theme.mem,
@@ -77,8 +70,10 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
                 ink: GraphInk::Load(view.snapshot.thermal),
             },
         );
+    } else {
+        render_fill_bar(frame, plot, ratio, theme.mem);
     }
-    let spec_area = spec_col.or_else(|| rows.get(2).copied());
+    let spec_area = spec_col.or(spec_row);
     if let Some(spec_area) = spec_area {
         let take = usize::from(spec_area.height);
         let lines: Vec<Line> = specs
@@ -131,6 +126,7 @@ fn mem_ratio(used: u64, total: u64) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::widgets::tests_support::fixture;
@@ -169,5 +165,34 @@ mod tests {
     fn ratio_handles_empty_total() {
         assert!((mem_ratio(18, 36) - 0.5).abs() < f32::EPSILON);
         assert!((mem_ratio(1, 0) - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn compact_mem_no_bar_when_graph() {
+        use crate::widgets::tests_support::fixture;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut fx = fixture("");
+        fx.snap.memory.used_bytes = 18 * 1024 * 1024 * 1024;
+        fx.snap.memory.total_bytes = 36 * 1024 * 1024 * 1024;
+        fx.mem.push(0.4);
+        fx.mem.push(0.5);
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render(frame, frame.area(), &fx.view(), &Theme::default()))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                text.push_str(buf[(x, y)].symbol());
+            }
+        }
+        assert!(
+            !text.contains('━'),
+            "used-ratio bar must not sit above the graph: {text}"
+        );
     }
 }

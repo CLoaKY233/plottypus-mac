@@ -61,19 +61,41 @@ fn render_compact(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &The
 
 fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     let mut spans = panel_title("sens", theme);
-    let temp = title_temp(view);
     let fans = present_fans(view);
-    if temp.is_none() && fans.is_empty() {
-        spans.spans.push(Span::styled("—".to_owned(), theme.dim()));
-        return spans;
-    }
-    if let Some(c) = temp {
-        push_token(&mut spans.spans, format!("{c:.0}°"), theme.temp());
-    }
     if !fans.is_empty() {
         spans.spans.extend(fan_speed_spans(fans, theme));
+        return spans;
     }
+    if let Some((tag, c)) = hottest_zone(view) {
+        push_token(&mut spans.spans, format!("{tag} {c:.0}°"), theme.temp());
+        return spans;
+    }
+    if let Some(c) = title_temp(view) {
+        push_token(&mut spans.spans, format!("{c:.0}°"), theme.temp());
+        return spans;
+    }
+    spans.spans.push(Span::styled("—".to_owned(), theme.dim()));
     spans
+}
+
+fn hottest_zone(view: &AppView<'_>) -> Option<(&'static str, f32)> {
+    let sensors = &view.snapshot.sensors;
+    [("s", sensors.s_c), ("p", sensors.p_c), ("e", sensors.e_c)]
+        .into_iter()
+        .filter_map(|(tag, c)| c.map(|v| (tag, v)))
+        .max_by(|a, b| {
+            a.1.total_cmp(&b.1)
+                .then_with(|| zone_rank(b.0).cmp(&zone_rank(a.0)))
+        })
+}
+
+fn zone_rank(tag: &str) -> u8 {
+    match tag {
+        "s" => 0,
+        "p" => 1,
+        "e" => 2,
+        _ => 3,
+    }
 }
 
 fn present_fans<'a>(view: &'a AppView<'_>) -> &'a [FanMetric] {
@@ -326,9 +348,39 @@ mod tests {
             ],
         };
         let text = line_text(&title(&fx.view(), &Theme::default()));
-        assert!(text.contains("52°"), "{text}");
-        assert!(text.contains("1200"), "{text}");
-        assert!(text.contains("1850"), "{text}");
+        assert!(
+            !text.contains("52°"),
+            "package °C leaves the title when fans exist: {text}"
+        );
+        assert!(text.contains("1200 rpm"), "{text}");
+        assert!(text.contains("1850 rpm"), "{text}");
+    }
+
+    #[test]
+    fn compact_sens_title_prefers_rpm() {
+        let mut fx = fixture("");
+        fx.snap.sensors.s_c = Some(71.0);
+        fx.snap.fans = FanSnapshot {
+            fans: vec![FanMetric {
+                name: String::from("Fan 1"),
+                rpm: 2140,
+                max_rpm: 6000,
+            }],
+        };
+        let text = line_text(&title(&fx.view(), &Theme::default()));
+        assert!(text.contains("2140 rpm"), "{text}");
+        assert!(!text.contains("71°"), "{text}");
+    }
+
+    #[test]
+    fn compact_sens_fanless_title_is_hottest_zone() {
+        let mut fx = fixture("");
+        fx.snap.sensors.e_c = Some(48.0);
+        fx.snap.sensors.p_c = Some(71.0);
+        fx.snap.sensors.s_c = Some(71.0);
+        let text = line_text(&title(&fx.view(), &Theme::default()));
+        assert!(text.contains("s 71°"), "super wins a tie: {text}");
+        assert!(!text.contains("e 48°"), "{text}");
     }
 
     #[test]
