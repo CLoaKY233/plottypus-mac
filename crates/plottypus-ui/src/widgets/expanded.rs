@@ -256,7 +256,7 @@ fn cpu_bands(view: &AppView<'_>) -> Vec<Band> {
                     "fan",
                     peak_fan(view).map(|rpm| format!("{rpm} rpm")),
                     Panel::Fans,
-                    view.show_fans && view.flags().has_fans,
+                    view.show_fans && view.snapshot.fans.is_present(),
                 ),
             ],
         },
@@ -663,9 +663,8 @@ fn paint_pack(frame: &mut Frame, placed: &Pack, view: &AppView<'_>, theme: &Them
             ID_SUPER_ZONE => paint_temp(frame, cell, view.s_temp_history, theme),
             ID_PERF_ZONE => paint_temp(frame, cell, view.p_temp_history, theme),
             ID_EFF_ZONE => paint_temp(frame, cell, view.e_temp_history, theme),
-            ID_PACKAGE | ID_HOP_SENS | ID_HOP_FAN => {
-                paint_temp(frame, cell, view.cpu_temp_history, theme);
-            }
+            ID_PACKAGE | ID_HOP_SENS => paint_temp(frame, cell, view.cpu_temp_history, theme),
+            ID_HOP_FAN => paint_fan_hop(frame, cell, view, theme),
             ID_GPU_TEMP => paint_temp(frame, cell, view.gpu_temp_history, theme),
             ID_HOP_PROC => paint_titled_empty(frame, cell, theme),
             ID_HOP_DISK => paint_series(
@@ -1239,14 +1238,62 @@ fn strip_value(view: &AppView<'_>, kind: ClusterKind) -> String {
     percent_display(cluster_load(view, kind))
 }
 
-fn peak_fan(view: &AppView<'_>) -> Option<u16> {
+fn peak_fan_index(view: &AppView<'_>) -> Option<usize> {
+    if !view.snapshot.fans.is_present() {
+        return None;
+    }
     view.snapshot
         .fans
         .fans
         .iter()
-        .map(|f| f.rpm)
-        .max()
-        .filter(|r| *r > 0)
+        .enumerate()
+        .min_by(|a, b| b.1.rpm.cmp(&a.1.rpm).then(a.0.cmp(&b.0)))
+        .map(|(i, _)| i)
+}
+
+fn peak_fan(view: &AppView<'_>) -> Option<u16> {
+    Some(view.snapshot.fans.fans.get(peak_fan_index(view)?)?.rpm)
+}
+
+fn paint_fan_hop(
+    frame: &mut Frame,
+    cell: &crate::widgets::grid::Placed,
+    view: &AppView<'_>,
+    theme: &Theme,
+) {
+    let Some(i) = peak_fan_index(view) else {
+        return;
+    };
+    let Some(fan) = view.snapshot.fans.fans.get(i) else {
+        return;
+    };
+    let value = if view.snapshot.fans.fans.len() >= 2 {
+        format!("max {} rpm", fan.rpm)
+    } else {
+        format!("{} rpm", fan.rpm)
+    };
+    let inner = cell_titled(
+        frame,
+        cell.rect,
+        "fan",
+        Some(&value),
+        cell.hop.is_some(),
+        theme,
+    );
+    if let Some(history) = view.fan_histories.get(i).filter(|h| !h.is_empty()) {
+        render_scaled_graph(
+            frame,
+            inner,
+            Graph {
+                history,
+                accent: theme.fan,
+                theme,
+                scale: Scale::FAN,
+                axis: Axis::Number,
+                ink: GraphInk::Flat,
+            },
+        );
+    }
 }
 
 fn extra_readings(view: &AppView<'_>) -> Vec<(String, f32)> {
@@ -1278,5 +1325,64 @@ fn thermal_word(thermal: Thermal) -> &'static str {
         Thermal::Fair => "fair",
         Thermal::Serious => "serious",
         Thermal::Critical => "critical",
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::{peak_fan, peak_fan_index};
+    use crate::layout::Panel;
+    use crate::widgets::tests_support::fixture;
+    use plottypus_core::{FanMetric, FanSnapshot};
+
+    fn fan(rpm: u16, max_rpm: u16) -> FanMetric {
+        FanMetric {
+            name: String::from("Fan"),
+            rpm,
+            max_rpm,
+        }
+    }
+
+    #[test]
+    fn peak_fan_index_picks_highest_rpm_then_lowest_index() {
+        let mut fx = fixture("");
+        fx.snap.fans = FanSnapshot {
+            fans: vec![fan(1200, 6000), fan(2140, 6000), fan(2140, 6000)],
+        };
+        let view = fx.view();
+        assert_eq!(peak_fan_index(&view), Some(1));
+        assert_eq!(peak_fan(&view), Some(2140));
+    }
+
+    #[test]
+    fn peak_fan_idle_zero_is_present() {
+        let mut fx = fixture("");
+        fx.snap.fans = FanSnapshot {
+            fans: vec![fan(0, 6000)],
+        };
+        let view = fx.view();
+        assert_eq!(peak_fan_index(&view), Some(0));
+        assert_eq!(peak_fan(&view), Some(0));
+    }
+
+    #[test]
+    fn peak_fan_absent_when_no_hardware() {
+        let fx = fixture("");
+        assert!(peak_fan_index(&fx.view()).is_none());
+        assert!(peak_fan(&fx.view()).is_none());
+    }
+
+    #[test]
+    fn sensors_without_fans_do_not_open_a_fan_hop() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        fx.snap.sensors.cpu_c = Some(42.0);
+        fx.snap.fans = FanSnapshot { fans: Vec::new() };
+        let present = super::cpu_bands(&fx.view())
+            .iter()
+            .flat_map(|b| &b.cells)
+            .any(|c| c.id == super::ID_HOP_FAN && c.present);
+        assert!(!present);
     }
 }

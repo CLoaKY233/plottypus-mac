@@ -849,6 +849,60 @@ mod render_tests {
     }
 
     #[test]
+    fn expand_cpu_fan_hop_shows_rpm() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        fx.snap.cpu.cores = vec![CoreSample {
+            kind: ClusterKind::Performance,
+            index: 0,
+            scaled: 0.4,
+            active: 0.4,
+        }];
+        fx.snap.fans = FanSnapshot {
+            fans: vec![
+                FanMetric {
+                    name: String::from("Fan 1"),
+                    rpm: 1200,
+                    max_rpm: 6000,
+                },
+                FanMetric {
+                    name: String::from("Fan 2"),
+                    rpm: 2140,
+                    max_rpm: 6000,
+                },
+            ],
+        };
+        let text = paint(&fx.view(), 80, 24);
+        assert!(text.contains("rpm"), "fan hop must show rpm: {text}");
+        assert!(
+            text.contains("max 2140 rpm"),
+            "two fans use the max title: {text}"
+        );
+        assert!(text.contains("fan"), "{text}");
+    }
+
+    #[test]
+    fn expand_cpu_idle_fan_shows_zero_rpm() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        fx.snap.cpu.cores = vec![CoreSample {
+            kind: ClusterKind::Performance,
+            index: 0,
+            scaled: 0.2,
+            active: 0.2,
+        }];
+        fx.snap.fans = FanSnapshot {
+            fans: vec![FanMetric {
+                name: String::from("Fan 1"),
+                rpm: 0,
+                max_rpm: 6000,
+            }],
+        };
+        let text = paint(&fx.view(), 80, 24);
+        assert!(text.contains("0 rpm"), "idle fan is a real number: {text}");
+    }
+
+    #[test]
     fn hop_hit_on_related_cell() {
         let mut fx = fixture("");
         fx.expanded = Some(Panel::Cpu);
