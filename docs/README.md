@@ -13,7 +13,8 @@ Research notes for a **macOS-first**, **Ratatui** system monitor. Nothing here i
 | [research/04-synthesis.md](research/04-synthesis.md) | How those three threads combine: aesthetics, metric set, efficiency, responsive layout. Still not code. |
 | [research/05-product-design.md](research/05-product-design.md) | PRD — two surfaces, calm default, accuracy |
 | [research/06-product-critique.md](research/06-product-critique.md) | Head-of-product red pen and locked decisions |
-| [research/08-dashboard-ux-rewrite.md](research/08-dashboard-ux-rewrite.md) | Training-run cockpit: cross-links, packer, smoothness. Next implementation plan. |
+| [research/08-dashboard-ux-rewrite.md](research/08-dashboard-ux-rewrite.md) | Training-run cockpit (shipped at cc23f36). Historical plan. |
+| [research/09-one-fact-one-home.md](research/09-one-fact-one-home.md) | Pass 2: de-dupe, shorter usage, metadata rail, fan RPM. Next implementation plan. |
 | [mockups/dashboard.html](mockups/dashboard.html) | Work + Glance visual target |
 
 Cloned sources used while writing these (not vendored into this repo):
