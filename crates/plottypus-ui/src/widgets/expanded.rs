@@ -168,82 +168,85 @@ fn cpu_bands(view: &AppView<'_>) -> Vec<Band> {
     let grow = view.show_cores && (s || p || e);
     vec![
         Band {
-            min_height: 5,
-            grow_to: None,
-            cells: vec![
-                graph_spec(
-                    ID_CPU,
-                    "cpu",
-                    Some(ready_pct(view.ready, view.snapshot.cpu.scaled)),
-                    true,
-                ),
-                graph_spec(
-                    ID_SUPER_LOAD,
-                    "super",
-                    Some(percent_display(cluster_load(view, ClusterKind::Super))),
-                    s,
-                ),
-                graph_spec(
-                    ID_PERF_LOAD,
-                    "performance",
-                    Some(percent_display(cluster_load(
-                        view,
-                        ClusterKind::Performance,
-                    ))),
-                    p,
-                ),
-                graph_spec(
-                    ID_EFF_LOAD,
-                    "efficiency",
-                    Some(percent_display(cluster_load(view, ClusterKind::Efficiency))),
-                    e,
-                ),
-            ],
+            max_height: Some(4),
+            ..Band::new(
+                4,
+                vec![
+                    graph_spec(
+                        ID_CPU,
+                        "cpu",
+                        Some(ready_pct(view.ready, view.snapshot.cpu.scaled)),
+                        true,
+                    ),
+                    graph_spec(
+                        ID_SUPER_LOAD,
+                        "super",
+                        Some(percent_display(cluster_load(view, ClusterKind::Super))),
+                        s,
+                    ),
+                    graph_spec(
+                        ID_PERF_LOAD,
+                        "performance",
+                        Some(percent_display(cluster_load(
+                            view,
+                            ClusterKind::Performance,
+                        ))),
+                        p,
+                    ),
+                    graph_spec(
+                        ID_EFF_LOAD,
+                        "efficiency",
+                        Some(percent_display(cluster_load(view, ClusterKind::Efficiency))),
+                        e,
+                    ),
+                ],
+            )
         },
         Band {
-            min_height: 5,
-            grow_to: None,
-            cells: vec![
-                graph_spec(
-                    ID_SUPER_ZONE,
-                    "super zone",
-                    zone_value(view, ClusterKind::Super),
-                    live(view.snapshot.sensors.s_c, view.s_temp_history),
-                ),
-                graph_spec(
-                    ID_PERF_ZONE,
-                    "perf zone",
-                    zone_value(view, ClusterKind::Performance),
-                    live(view.snapshot.sensors.p_c, view.p_temp_history),
-                ),
-                graph_spec(
-                    ID_EFF_ZONE,
-                    "eff zone",
-                    zone_value(view, ClusterKind::Efficiency),
-                    live(view.snapshot.sensors.e_c, view.e_temp_history),
-                ),
-                graph_spec(
-                    ID_PACKAGE,
-                    "package",
-                    view.snapshot
-                        .cpu
-                        .temp_c
-                        .or(view.snapshot.sensors.best_cpu_c())
-                        .map(|c| format!("{c:.0}°")),
-                    live(
+            take_leftover: true,
+            ..Band::new(
+                5,
+                vec![
+                    graph_spec(
+                        ID_SUPER_ZONE,
+                        "super zone",
+                        zone_value(view, ClusterKind::Super),
+                        live(view.snapshot.sensors.s_c, view.s_temp_history),
+                    ),
+                    graph_spec(
+                        ID_PERF_ZONE,
+                        "perf zone",
+                        zone_value(view, ClusterKind::Performance),
+                        live(view.snapshot.sensors.p_c, view.p_temp_history),
+                    ),
+                    graph_spec(
+                        ID_EFF_ZONE,
+                        "eff zone",
+                        zone_value(view, ClusterKind::Efficiency),
+                        live(view.snapshot.sensors.e_c, view.e_temp_history),
+                    ),
+                    graph_spec(
+                        ID_PACKAGE,
+                        "package",
                         view.snapshot
                             .cpu
                             .temp_c
-                            .or(view.snapshot.sensors.best_cpu_c()),
-                        view.cpu_temp_history,
+                            .or(view.snapshot.sensors.best_cpu_c())
+                            .map(|c| format!("{c:.0}°")),
+                        live(
+                            view.snapshot
+                                .cpu
+                                .temp_c
+                                .or(view.snapshot.sensors.best_cpu_c()),
+                            view.cpu_temp_history,
+                        ),
                     ),
-                ),
-            ],
+                ],
+            )
         },
-        Band {
-            min_height: 3,
-            grow_to: None,
-            cells: vec![
+        Band::new(
+            3,
+            vec![
                 spark_spec(
                     ID_HOP_GPU,
                     "gpu",
@@ -259,30 +262,32 @@ fn cpu_bands(view: &AppView<'_>) -> Vec<Band> {
                     view.show_fans && view.snapshot.fans.is_present(),
                 ),
             ],
-        },
+        ),
         Band {
-            min_height: 5,
             grow_to: grow.then_some(8),
-            cells: vec![
-                cluster_spec(
-                    ID_SUPER_STRIP,
-                    "super",
-                    Some(strip_value(view, ClusterKind::Super)),
-                    s,
-                ),
-                cluster_spec(
-                    ID_PERF_STRIP,
-                    "performance",
-                    Some(strip_value(view, ClusterKind::Performance)),
-                    p,
-                ),
-                cluster_spec(
-                    ID_EFF_STRIP,
-                    "efficiency",
-                    Some(strip_value(view, ClusterKind::Efficiency)),
-                    e,
-                ),
-            ],
+            ..Band::new(
+                5,
+                vec![
+                    cluster_spec(
+                        ID_SUPER_STRIP,
+                        "super",
+                        Some(strip_value(view, ClusterKind::Super)),
+                        s,
+                    ),
+                    cluster_spec(
+                        ID_PERF_STRIP,
+                        "performance",
+                        Some(strip_value(view, ClusterKind::Performance)),
+                        p,
+                    ),
+                    cluster_spec(
+                        ID_EFF_STRIP,
+                        "efficiency",
+                        Some(strip_value(view, ClusterKind::Efficiency)),
+                        e,
+                    ),
+                ],
+            )
         },
     ]
 }
@@ -294,29 +299,33 @@ fn gpu_bands(view: &AppView<'_>) -> Vec<Band> {
     let temp = gpu.temp_c.or(view.snapshot.sensors.gpu_c);
     vec![
         Band {
-            min_height: 5,
-            grow_to: None,
-            cells: vec![graph_spec(
-                ID_GPU_UTIL,
-                "gpu",
-                Some(ready_pct(view.ready, gpu.scaled)),
-                true,
-            )],
+            max_height: Some(10),
+            take_leftover: true,
+            ..Band::new(
+                5,
+                vec![graph_spec(
+                    ID_GPU_UTIL,
+                    "gpu",
+                    Some(ready_pct(view.ready, gpu.scaled)),
+                    true,
+                )],
+            )
         },
         Band {
-            min_height: 5,
-            grow_to: None,
-            cells: vec![graph_spec(
-                ID_GPU_TEMP,
-                "gpu temp",
-                temp.map(|c| format!("{c:.0}°")),
-                live(temp, view.gpu_temp_history),
-            )],
+            take_leftover: true,
+            ..Band::new(
+                5,
+                vec![graph_spec(
+                    ID_GPU_TEMP,
+                    "gpu temp",
+                    temp.map(|c| format!("{c:.0}°")),
+                    live(temp, view.gpu_temp_history),
+                )],
+            )
         },
-        Band {
-            min_height: 3,
-            grow_to: None,
-            cells: vec![
+        Band::new(
+            3,
+            vec![
                 spark_spec(
                     ID_HOP_CPU,
                     "cpu",
@@ -335,7 +344,7 @@ fn gpu_bands(view: &AppView<'_>) -> Vec<Band> {
                     view.show_fans && view.flags().has_fans,
                 ),
             ],
-        },
+        ),
     ]
 }
 
@@ -364,63 +373,65 @@ fn sens_bands(view: &AppView<'_>) -> Vec<Band> {
     let extras = extra_readings(view);
     vec![
         Band {
-            min_height: 5,
-            grow_to: None,
-            cells: vec![
-                graph_spec(
-                    ID_SUPER_ZONE,
-                    "super zone",
-                    zone_value(view, ClusterKind::Super),
-                    live(view.snapshot.sensors.s_c, view.s_temp_history),
-                ),
-                graph_spec(
-                    ID_PERF_ZONE,
-                    "perf zone",
-                    zone_value(view, ClusterKind::Performance),
-                    live(view.snapshot.sensors.p_c, view.p_temp_history),
-                ),
-                graph_spec(
-                    ID_EFF_ZONE,
-                    "eff zone",
-                    zone_value(view, ClusterKind::Efficiency),
-                    live(view.snapshot.sensors.e_c, view.e_temp_history),
-                ),
-                graph_spec(
-                    ID_PACKAGE,
-                    "package",
-                    view.snapshot
-                        .sensors
-                        .best_cpu_c()
-                        .map(|c| format!("{c:.0}°")),
-                    live(view.snapshot.sensors.best_cpu_c(), view.cpu_temp_history),
-                ),
-                graph_spec(
-                    ID_GPU_TEMP,
-                    "gpu temp",
-                    view.snapshot
-                        .sensors
-                        .gpu_c
-                        .or(view.snapshot.gpu.and_then(|g| g.temp_c))
-                        .map(|c| format!("{c:.0}°")),
-                    live(
+            max_height: Some(16),
+            take_leftover: true,
+            ..Band::new(
+                5,
+                vec![
+                    graph_spec(
+                        ID_SUPER_ZONE,
+                        "super zone",
+                        zone_value(view, ClusterKind::Super),
+                        live(view.snapshot.sensors.s_c, view.s_temp_history),
+                    ),
+                    graph_spec(
+                        ID_PERF_ZONE,
+                        "perf zone",
+                        zone_value(view, ClusterKind::Performance),
+                        live(view.snapshot.sensors.p_c, view.p_temp_history),
+                    ),
+                    graph_spec(
+                        ID_EFF_ZONE,
+                        "eff zone",
+                        zone_value(view, ClusterKind::Efficiency),
+                        live(view.snapshot.sensors.e_c, view.e_temp_history),
+                    ),
+                    graph_spec(
+                        ID_PACKAGE,
+                        "package",
+                        view.snapshot
+                            .sensors
+                            .best_cpu_c()
+                            .map(|c| format!("{c:.0}°")),
+                        live(view.snapshot.sensors.best_cpu_c(), view.cpu_temp_history),
+                    ),
+                    graph_spec(
+                        ID_GPU_TEMP,
+                        "gpu temp",
                         view.snapshot
                             .sensors
                             .gpu_c
-                            .or(view.snapshot.gpu.and_then(|g| g.temp_c)),
-                        view.gpu_temp_history,
+                            .or(view.snapshot.gpu.and_then(|g| g.temp_c))
+                            .map(|c| format!("{c:.0}°")),
+                        live(
+                            view.snapshot
+                                .sensors
+                                .gpu_c
+                                .or(view.snapshot.gpu.and_then(|g| g.temp_c)),
+                            view.gpu_temp_history,
+                        ),
                     ),
-                ),
-            ],
+                ],
+            )
         },
         Band {
-            min_height: 5,
-            grow_to: None,
-            cells: fans,
+            max_height: Some(16),
+            take_leftover: true,
+            ..Band::new(5, fans)
         },
-        Band {
-            min_height: 3,
-            grow_to: None,
-            cells: vec![
+        Band::new(
+            3,
+            vec![
                 spark_spec(
                     ID_HOP_CPU,
                     "cpu",
@@ -448,7 +459,7 @@ fn sens_bands(view: &AppView<'_>) -> Vec<Band> {
                     present: !extras.is_empty(),
                 },
             ],
-        },
+        ),
     ]
 }
 
@@ -480,62 +491,60 @@ fn mem_bands(view: &AppView<'_>) -> Vec<Band> {
     }
     vec![
         Band {
-            min_height: 5,
-            grow_to: None,
-            cells: vec![graph_spec(
-                ID_MEM,
-                "memory",
-                Some(format!(
-                    "{} / {}",
-                    bytes_short(m.used_bytes),
-                    bytes_short(m.total_bytes)
-                )),
-                true,
-            )],
+            take_leftover: true,
+            ..Band::new(
+                5,
+                vec![graph_spec(
+                    ID_MEM,
+                    "memory",
+                    Some(format!(
+                        "{} / {}",
+                        bytes_short(m.used_bytes),
+                        bytes_short(m.total_bytes)
+                    )),
+                    true,
+                )],
+            )
         },
-        Band {
-            min_height: 5,
-            grow_to: None,
-            cells: parts,
-        },
-        Band {
-            min_height: 3,
-            grow_to: None,
-            cells: vec![spark_spec(
+        Band::new(5, parts),
+        Band::new(
+            3,
+            vec![spark_spec(
                 ID_HOP_PROC,
                 "proc",
                 None,
                 Panel::Processes,
                 true,
             )],
-        },
+        ),
     ]
 }
 
 fn net_bands(view: &AppView<'_>) -> Vec<Band> {
     vec![
         Band {
-            min_height: 5,
-            grow_to: None,
-            cells: vec![
-                graph_spec(
-                    ID_NET_DOWN,
-                    "down",
-                    Some(bits_per_sec(view.snapshot.network.rx_bps)),
-                    true,
-                ),
-                graph_spec(
-                    ID_NET_UP,
-                    "up",
-                    Some(bits_per_sec(view.snapshot.network.tx_bps)),
-                    true,
-                ),
-            ],
+            take_leftover: true,
+            ..Band::new(
+                5,
+                vec![
+                    graph_spec(
+                        ID_NET_DOWN,
+                        "down",
+                        Some(bits_per_sec(view.snapshot.network.rx_bps)),
+                        true,
+                    ),
+                    graph_spec(
+                        ID_NET_UP,
+                        "up",
+                        Some(bits_per_sec(view.snapshot.network.tx_bps)),
+                        true,
+                    ),
+                ],
+            )
         },
-        Band {
-            min_height: 3,
-            grow_to: None,
-            cells: vec![spark_spec(
+        Band::new(
+            3,
+            vec![spark_spec(
                 ID_HOP_DISK,
                 "disk",
                 Some(bytes_per_sec(
@@ -547,34 +556,35 @@ fn net_bands(view: &AppView<'_>) -> Vec<Band> {
                 Panel::Disk,
                 view.show_disk && view.flags().has_disk,
             )],
-        },
+        ),
     ]
 }
 
 fn disk_bands(view: &AppView<'_>) -> Vec<Band> {
     vec![
         Band {
-            min_height: 5,
-            grow_to: None,
-            cells: vec![
-                graph_spec(
-                    ID_DISK_READ,
-                    "read",
-                    Some(bytes_per_sec(view.snapshot.disk.read_bps)),
-                    true,
-                ),
-                graph_spec(
-                    ID_DISK_WRITE,
-                    "write",
-                    Some(bytes_per_sec(view.snapshot.disk.write_bps)),
-                    true,
-                ),
-            ],
+            take_leftover: true,
+            ..Band::new(
+                5,
+                vec![
+                    graph_spec(
+                        ID_DISK_READ,
+                        "read",
+                        Some(bytes_per_sec(view.snapshot.disk.read_bps)),
+                        true,
+                    ),
+                    graph_spec(
+                        ID_DISK_WRITE,
+                        "write",
+                        Some(bytes_per_sec(view.snapshot.disk.write_bps)),
+                        true,
+                    ),
+                ],
+            )
         },
-        Band {
-            min_height: 4,
-            grow_to: None,
-            cells: vec![CellSpec {
+        Band::new(
+            4,
+            vec![CellSpec {
                 id: ID_VOLUMES,
                 kind: CellKind::List,
                 title: CellTitle {
@@ -586,18 +596,17 @@ fn disk_bands(view: &AppView<'_>) -> Vec<Band> {
                 weight: 1,
                 present: !view.snapshot.disk.volumes.is_empty(),
             }],
-        },
-        Band {
-            min_height: 3,
-            grow_to: None,
-            cells: vec![spark_spec(
+        ),
+        Band::new(
+            3,
+            vec![spark_spec(
                 ID_HOP_NET,
                 "net",
                 None,
                 Panel::Net,
                 view.show_net,
             )],
-        },
+        ),
     ]
 }
 

@@ -30,8 +30,23 @@ pub struct CellSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Band {
     pub min_height: u16,
+    pub max_height: Option<u16>,
     pub grow_to: Option<u16>,
+    pub take_leftover: bool,
     pub cells: Vec<CellSpec>,
+}
+
+impl Band {
+    #[must_use]
+    pub fn new(min_height: u16, cells: Vec<CellSpec>) -> Self {
+        Self {
+            min_height,
+            max_height: None,
+            grow_to: None,
+            take_leftover: false,
+            cells,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,15 +126,22 @@ pub fn pack(area: Rect, bands: &[Band]) -> Pack {
             leftover = leftover.saturating_sub(give);
         }
     }
-    if leftover > 0 {
-        let target = live
-            .iter()
-            .position(|b| b.cells.iter().any(|c| c.kind == CellKind::Graph))
-            .or(Some(0));
-        if let Some(i) = target
-            && let Some(h) = heights.get_mut(i)
-        {
-            *h = h.saturating_add(leftover);
+    for (i, band) in live.iter().enumerate() {
+        if leftover == 0 {
+            break;
+        }
+        if !band.take_leftover {
+            continue;
+        }
+        let cap = band.max_height.unwrap_or(u16::MAX);
+        let room = cap.saturating_sub(heights[i]);
+        let give = room.min(leftover);
+        heights[i] = heights[i].saturating_add(give);
+        leftover = leftover.saturating_sub(give);
+    }
+    for (i, band) in live.iter().enumerate() {
+        if let Some(cap) = band.max_height {
+            heights[i] = heights[i].min(cap);
         }
     }
 
@@ -187,7 +209,7 @@ fn split_fill(area: Rect, cells: &[&CellSpec]) -> Vec<Rect> {
 
 fn resolve_kind(kind: CellKind, height: u16) -> Option<CellKind> {
     match kind {
-        CellKind::Graph if height >= 5 => Some(CellKind::Graph),
+        CellKind::Graph if height >= 4 => Some(CellKind::Graph),
         CellKind::Graph | CellKind::Spark if height >= 3 => Some(CellKind::Spark),
         CellKind::Cluster if height >= 4 => Some(CellKind::Cluster),
         CellKind::List if height >= 3 => Some(CellKind::List),
@@ -248,23 +270,28 @@ mod tests {
     fn cpu_bands_hops(hops: bool) -> Vec<Band> {
         vec![
             Band {
-                min_height: 5,
-                grow_to: None,
-                cells: vec![graph(0, "cpu"), graph(1, "super"), graph(2, "perf")],
+                min_height: 4,
+                max_height: Some(4),
+                take_leftover: false,
+                ..Band::new(
+                    4,
+                    vec![graph(0, "cpu"), graph(1, "super"), graph(2, "perf")],
+                )
             },
             Band {
-                min_height: 5,
-                grow_to: None,
-                cells: vec![
-                    graph(10, "super zone"),
-                    graph(11, "perf zone"),
-                    graph(13, "package"),
-                ],
+                take_leftover: true,
+                ..Band::new(
+                    5,
+                    vec![
+                        graph(10, "super zone"),
+                        graph(11, "perf zone"),
+                        graph(13, "package"),
+                    ],
+                )
             },
-            Band {
-                min_height: 3,
-                grow_to: None,
-                cells: vec![
+            Band::new(
+                3,
+                vec![
                     CellSpec {
                         present: hops,
                         ..spark(20, "gpu", Panel::Gpu)
@@ -274,11 +301,10 @@ mod tests {
                         ..spark(21, "fan", Panel::Fans)
                     },
                 ],
-            },
+            ),
             Band {
-                min_height: 5,
                 grow_to: Some(8),
-                cells: vec![cluster(30, "super"), cluster(31, "perf")],
+                ..Band::new(5, vec![cluster(30, "super"), cluster(31, "perf")])
             },
         ]
     }
@@ -291,17 +317,17 @@ mod tests {
         let super_g = pack.get(1).expect("super");
         let perf_g = pack.get(2).expect("perf");
         assert_eq!(cpu.kind, CellKind::Graph);
-        assert_eq!(cpu.rect, Rect::new(0, 0, 26, 5));
-        assert_eq!(super_g.rect, Rect::new(26, 0, 26, 5));
-        assert_eq!(perf_g.rect, Rect::new(52, 0, 26, 5));
+        assert_eq!(cpu.rect, Rect::new(0, 0, 26, 4));
+        assert_eq!(super_g.rect, Rect::new(26, 0, 26, 4));
+        assert_eq!(perf_g.rect, Rect::new(52, 0, 26, 4));
 
         let zone = pack.get(10).expect("super zone");
-        assert_eq!(zone.rect, Rect::new(0, 5, 26, 5));
+        assert_eq!(zone.rect, Rect::new(0, 4, 26, 6));
         assert_eq!(
             pack.get(11).expect("perf zone").rect,
-            Rect::new(26, 5, 26, 5)
+            Rect::new(26, 4, 26, 6)
         );
-        assert_eq!(pack.get(13).expect("package").rect, Rect::new(52, 5, 26, 5));
+        assert_eq!(pack.get(13).expect("package").rect, Rect::new(52, 4, 26, 6));
 
         let gpu = pack.get(20).expect("gpu hop");
         let fan = pack.get(21).expect("fan hop");
@@ -321,12 +347,13 @@ mod tests {
     }
 
     #[test]
-    fn pack_cpu_80x23_without_hops_grows_usage() {
+    fn pack_leftover_does_not_fatten_capped_band() {
         let area = Rect::new(0, 0, 78, 21);
         let pack = pack(area, &cpu_bands_hops(false));
         assert!(pack.get(20).is_none());
         let cpu = pack.get(0).expect("cpu");
-        assert_eq!(cpu.rect.height, 8);
+        assert_eq!(cpu.rect.height, 4);
+        assert_eq!(pack.get(10).expect("zone").rect.height, 9);
         assert_eq!(pack.get(30).expect("strip").rect.height, 8);
     }
 
@@ -341,17 +368,16 @@ mod tests {
 
     #[test]
     fn pack_omits_absent_cells() {
-        let bands = [Band {
-            min_height: 5,
-            grow_to: None,
-            cells: vec![
+        let bands = [Band::new(
+            5,
+            vec![
                 graph(0, "cpu"),
                 CellSpec {
                     present: false,
                     ..graph(3, "eff")
                 },
             ],
-        }];
+        )];
         let pack = pack(Rect::new(0, 0, 40, 5), &bands);
         assert!(pack.get(0).is_some());
         assert!(pack.get(3).is_none());
