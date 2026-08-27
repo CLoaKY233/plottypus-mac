@@ -1098,16 +1098,29 @@ mod tests {
     #[test]
     fn click_box_focuses_without_expand() {
         let mut app = App::new().unwrap();
+        app.config.surface = Some(Surface::Work);
+        app.surface = Surface::Work;
         app.last_area = ratatui::layout::Rect::new(0, 0, 120, 30);
-        let planned = plan(app.last_area, Surface::Work, app.layout_flags());
-        let cpu = planned.cpu.unwrap_or_default();
+        let planned = plan(app.last_area, app.effective_surface(), app.layout_flags());
+        let cpu = planned.cpu.expect("work surface always has cpu");
+        let inner = (cpu.x + 2, cpu.y + 1);
+        assert_eq!(
+            hit_test(
+                app.last_area,
+                app.effective_surface(),
+                app.layout_flags(),
+                inner.0,
+                inner.1
+            ),
+            Some(Hit::Panel(Panel::Cpu))
+        );
         app.handle(Event::Click {
-            col: cpu.x + 2,
-            row: cpu.y + 1,
+            col: inner.0,
+            row: inner.1,
         });
         assert_eq!(app.focus, Focus::Cpu);
         assert!(app.expanded.is_none());
-        let corner = LayoutPlan::corner_hit(cpu).unwrap_or_default();
+        let corner = LayoutPlan::corner_hit(cpu).expect("cpu pane is wide enough");
         app.handle(Event::Click {
             col: corner.x,
             row: corner.y,
@@ -1118,6 +1131,8 @@ mod tests {
     #[test]
     fn click_selected_process_opens_detail() {
         let mut app = App::new().unwrap();
+        app.config.surface = Some(Surface::Work);
+        app.surface = Surface::Work;
         app.snapshot.processes = vec![plottypus_core::Process {
             pid: 7,
             ppid: 1,
@@ -1132,14 +1147,19 @@ mod tests {
             start_unix: 0,
             cpu_spark: Vec::new(),
         }];
+        app.sync_selection();
         app.focus = Focus::Processes;
         app.last_area = ratatui::layout::Rect::new(0, 0, 120, 30);
-        let planned = plan(app.last_area, Surface::Work, app.layout_flags());
-        let proc = planned.processes.unwrap_or_default();
-        app.handle(Event::Click {
-            col: proc.x + 2,
-            row: proc.y + 3,
-        });
+        let flags = app.layout_flags();
+        let planned = plan(app.last_area, app.effective_surface(), flags);
+        let proc = planned.processes.expect("work surface always has proc");
+        let col = proc.x.saturating_add(2);
+        let row = proc.y.saturating_add(3);
+        assert_eq!(
+            hit_test(app.last_area, app.effective_surface(), flags, col, row),
+            Some(Hit::ProcRow(0))
+        );
+        app.handle(Event::Click { col, row });
         assert_eq!(app.proc.selected_pid, Some(7));
         assert_eq!(app.detail_pid, Some(7));
         app.handle(Event::FilterCancel);
