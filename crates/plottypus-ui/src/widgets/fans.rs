@@ -41,12 +41,10 @@ fn render_compact(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &The
         render_headline(frame, area, &named, fans, theme);
         return;
     }
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
-    render_headline(frame, rows[0], &named, fans, theme);
     if let Some(history) = graph {
         render_scaled_graph(
             frame,
-            rows[1],
+            area,
             Graph {
                 history,
                 accent: theme.temp,
@@ -61,41 +59,26 @@ fn render_compact(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &The
 
 fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     let mut spans = panel_title("sens", theme);
+    let named = named_temps(view);
     let fans = present_fans(view);
-    if !fans.is_empty() {
-        spans.spans.extend(fan_speed_spans(fans, theme));
-        return spans;
+    for (name, c) in &named {
+        push_token(
+            &mut spans.spans,
+            format!("{name} {c:.0}°"),
+            Style::default().fg(theme.temp_color(*c)),
+        );
     }
-    if let Some((tag, c)) = hottest_zone(view) {
-        push_token(&mut spans.spans, format!("{tag} {c:.0}°"), theme.temp());
-        return spans;
+    for fan in fans {
+        push_token(&mut spans.spans, format!("{} rpm", fan.rpm), theme.title());
     }
-    if let Some(c) = title_temp(view) {
-        push_token(&mut spans.spans, format!("{c:.0}°"), theme.temp());
-        return spans;
+    if named.is_empty() && fans.is_empty() {
+        if let Some(c) = title_temp(view) {
+            push_token(&mut spans.spans, format!("{c:.0}°"), theme.temp());
+        } else {
+            spans.spans.push(Span::styled("—".to_owned(), theme.dim()));
+        }
     }
-    spans.spans.push(Span::styled("—".to_owned(), theme.dim()));
     spans
-}
-
-fn hottest_zone(view: &AppView<'_>) -> Option<(&'static str, f32)> {
-    let sensors = &view.snapshot.sensors;
-    [("s", sensors.s_c), ("p", sensors.p_c), ("e", sensors.e_c)]
-        .into_iter()
-        .filter_map(|(tag, c)| c.map(|v| (tag, v)))
-        .max_by(|a, b| {
-            a.1.total_cmp(&b.1)
-                .then_with(|| zone_rank(b.0).cmp(&zone_rank(a.0)))
-        })
-}
-
-fn zone_rank(tag: &str) -> u8 {
-    match tag {
-        "s" => 0,
-        "p" => 1,
-        "e" => 2,
-        _ => 3,
-    }
 }
 
 fn present_fans<'a>(view: &'a AppView<'_>) -> &'a [FanMetric] {
@@ -209,7 +192,20 @@ fn named_temps(view: &AppView<'_>) -> Vec<(String, f32)> {
     {
         out.push((r.name.clone(), r.celsius));
     }
+    out.sort_by(|a, b| {
+        b.1.total_cmp(&a.1)
+            .then_with(|| zone_title_rank(&a.0).cmp(&zone_title_rank(&b.0)))
+    });
     out
+}
+
+fn zone_title_rank(name: &str) -> u8 {
+    match name {
+        "s" => 0,
+        "p" => 1,
+        "e" => 2,
+        _ => 3,
+    }
 }
 
 fn render_temp_line(frame: &mut Frame, area: Rect, temps: &[(String, f32)], theme: &Theme) {
@@ -348,10 +344,7 @@ mod tests {
             ],
         };
         let text = line_text(&title(&fx.view(), &Theme::default()));
-        assert!(
-            !text.contains("52°"),
-            "package °C leaves the title when fans exist: {text}"
-        );
+        assert!(text.contains("52°"), "temps ride in the title: {text}");
         assert!(text.contains("1200 rpm"), "{text}");
         assert!(text.contains("1850 rpm"), "{text}");
     }
@@ -369,18 +362,19 @@ mod tests {
         };
         let text = line_text(&title(&fx.view(), &Theme::default()));
         assert!(text.contains("2140 rpm"), "{text}");
-        assert!(!text.contains("71°"), "{text}");
+        assert!(text.contains("s 71°"), "{text}");
     }
 
     #[test]
-    fn compact_sens_fanless_title_is_hottest_zone() {
+    fn compact_sens_fanless_title_lists_zones() {
         let mut fx = fixture("");
         fx.snap.sensors.e_c = Some(48.0);
         fx.snap.sensors.p_c = Some(71.0);
         fx.snap.sensors.s_c = Some(71.0);
         let text = line_text(&title(&fx.view(), &Theme::default()));
-        assert!(text.contains("s 71°"), "super wins a tie: {text}");
-        assert!(!text.contains("e 48°"), "{text}");
+        assert!(text.contains("s 71°"), "{text}");
+        assert!(text.contains("p 71°"), "{text}");
+        assert!(text.contains("e 48°"), "{text}");
     }
 
     #[test]
@@ -395,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_is_headline_and_graph() {
+    fn compact_is_title_and_graph() {
         let fx = thermal_fixture();
         let text = paint(&fx.view(), 48, 8);
         assert!(text.contains("cpu"), "{text}");

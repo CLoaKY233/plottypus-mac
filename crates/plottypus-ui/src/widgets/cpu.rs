@@ -1,13 +1,12 @@
 use plottypus_core::{Scale, Thermal, percent_display, watts_display};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 
 use crate::chrome::{
     Axis, Graph, GraphInk, panel_block, panel_title, push_token, render_scaled_graph,
 };
-use crate::layout::{Degrade, Panel};
+use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
 
@@ -25,17 +24,9 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         return;
     }
 
-    let spec = spec_line(view, theme);
-    let (plot, spec_row) =
-        if inner.height >= 4 && view.degrade != Degrade::Minimal && line_has_text(&spec) {
-            let rows = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).split(inner);
-            (rows[0], Some(rows[1]))
-        } else {
-            (inner, None)
-        };
     render_scaled_graph(
         frame,
-        plot,
+        inner,
         Graph {
             history: view.cpu_history,
             accent: theme.cpu,
@@ -45,9 +36,6 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
             ink: GraphInk::Load(view.snapshot.thermal),
         },
     );
-    if let Some(row) = spec_row {
-        frame.render_widget(Paragraph::new(spec), row);
-    }
 }
 
 fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
@@ -88,6 +76,7 @@ fn busy_span(view: &AppView<'_>, theme: &Theme, spans: &mut Vec<Span<'static>>) 
     }
 }
 
+#[cfg(test)]
 fn spec_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     let mut spans = Vec::new();
     let name = view.snapshot.soc.name.trim();
@@ -118,6 +107,7 @@ fn ready_pct(ready: bool, ratio: f32) -> String {
     }
 }
 
+#[cfg(test)]
 fn core_label(e_cores: u8, p_cores: u8, s_cores: u8) -> Option<String> {
     let mut parts = Vec::new();
     if e_cores > 0 {
@@ -136,6 +126,7 @@ fn core_label(e_cores: u8, p_cores: u8, s_cores: u8) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 fn freq_label(mhz: u32) -> String {
     if mhz >= 1000 {
         format!("{:.1}GHz", f64::from(mhz) / 1000.0)
@@ -151,10 +142,6 @@ fn thermal_word(thermal: Thermal) -> &'static str {
         Thermal::Serious => "serious",
         Thermal::Critical => "critical",
     }
-}
-
-fn line_has_text(line: &Line<'_>) -> bool {
-    line.spans.iter().any(|s| !s.content.is_empty())
 }
 
 #[cfg(test)]

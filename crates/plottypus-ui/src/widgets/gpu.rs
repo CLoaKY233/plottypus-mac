@@ -1,14 +1,13 @@
 use plottypus_core::{Scale, percent_display, watts_display};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 
 use crate::chrome::{
     Axis, Graph, GraphInk, panel_block, panel_title, push_token, render_scaled_graph,
 };
 
-use crate::layout::{Degrade, Panel};
+use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
 
@@ -25,17 +24,9 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let spec = spec_line(view, theme);
-    let (plot, spec_row) =
-        if inner.height >= 4 && view.degrade != Degrade::Minimal && line_has_text(&spec) {
-            let rows = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).split(inner);
-            (rows[0], Some(rows[1]))
-        } else {
-            (inner, None)
-        };
     render_scaled_graph(
         frame,
-        plot,
+        inner,
         Graph {
             history: view.gpu_history,
             accent: theme.gpu,
@@ -45,18 +36,6 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
             ink: GraphInk::Load(view.snapshot.thermal),
         },
     );
-    if let Some(row) = spec_row {
-        frame.render_widget(Paragraph::new(spec), row);
-    }
-}
-
-fn spec_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
-    let items = spec_items(view);
-    let mut spans = Vec::new();
-    for item in items {
-        push_token(&mut spans, item, theme.dim());
-    }
-    Line::from(spans)
 }
 
 fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
@@ -82,6 +61,7 @@ fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     spans
 }
 
+#[cfg(test)]
 fn spec_items(view: &AppView<'_>) -> Vec<String> {
     let Some(gpu) = view.snapshot.gpu else {
         return Vec::new();
@@ -107,6 +87,7 @@ fn ready_pct(ready: bool, ratio: f32) -> String {
     }
 }
 
+#[cfg(test)]
 fn freq_label(mhz: u32) -> String {
     if mhz >= 1000 {
         format!("{:.1}GHz", f64::from(mhz) / 1000.0)
@@ -128,10 +109,6 @@ fn gpu_temp_c(view: &AppView<'_>) -> Option<f32> {
                     .then_some(r.celsius)
             })
         })
-}
-
-fn line_has_text(line: &Line<'_>) -> bool {
-    line.spans.iter().any(|s| !s.content.is_empty())
 }
 
 #[cfg(test)]

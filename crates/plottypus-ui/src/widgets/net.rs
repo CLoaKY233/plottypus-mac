@@ -1,8 +1,7 @@
 use plottypus_core::{History, Scale, bits_per_sec};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 
 use crate::chrome::{Axis, Graph, GraphInk, panel_block, render_scaled_graph};
 use crate::layout::Panel;
@@ -23,16 +22,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         return;
     }
 
-    let split_tx = inner.height >= 4;
-    if split_tx {
-        let rows = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).split(inner);
-        render_net_graph(frame, rows[0], view.net_rx_history, theme);
-        let tx = Layout::horizontal([Constraint::Length(3), Constraint::Fill(1)]).split(rows[1]);
-        frame.render_widget(Paragraph::new(Span::styled(" ↑ ", theme.dim())), tx[0]);
-        render_net_graph(frame, tx[1], view.net_tx_history, theme);
-    } else {
-        render_net_graph(frame, inner, view.net_rx_history, theme);
-    }
+    render_net_graph(frame, inner, view.net_rx_history, theme);
 }
 
 fn render_net_graph(frame: &mut Frame, area: Rect, history: &History, theme: &Theme) {

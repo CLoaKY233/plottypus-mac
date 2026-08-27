@@ -1,8 +1,7 @@
 use plottypus_core::{DiskSnapshot, Scale, bytes_short};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 
 use crate::chrome::{
     Axis, Graph, GraphInk, panel_block, push_token, render_fill_bar, render_scaled_graph,
@@ -29,28 +28,10 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         return;
     }
 
-    let extras = extra_lines(disk, inner.height >= 6);
-    let extra_h = u16::try_from(extras.len())
-        .unwrap_or(0)
-        .min(inner.height.saturating_sub(2));
-    let rows = if extra_h > 0 {
-        Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Fill(1),
-            Constraint::Length(extra_h),
-        ])
-        .split(inner)
-    } else if inner.height >= 2 {
-        Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(inner)
-    } else {
-        Layout::vertical([Constraint::Fill(1)]).split(inner)
-    };
-
-    render_fill_bar(frame, rows[0], disk.used_ratio(), theme.disk);
-    if rows.len() > 1 {
+    if inner.height >= 2 {
         render_scaled_graph(
             frame,
-            rows[1],
+            inner,
             Graph {
                 history: view.disk_history,
                 accent: theme.disk,
@@ -60,13 +41,8 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
                 ink: GraphInk::Flat,
             },
         );
-    }
-    if let Some(extra) = rows.get(2) {
-        let lines: Vec<Line> = extras
-            .into_iter()
-            .map(|s| Line::from(Span::styled(s, theme.dim())))
-            .collect();
-        frame.render_widget(Paragraph::new(lines), *extra);
+    } else {
+        render_fill_bar(frame, inner, disk.used_ratio(), theme.disk);
     }
 }
 
@@ -82,35 +58,6 @@ fn title(disk: &DiskSnapshot, theme: &Theme) -> Line<'static> {
         }
     }
     Line::from(spans)
-}
-
-fn extra_lines(disk: &DiskSnapshot, show_volumes: bool) -> Vec<String> {
-    let mut lines = Vec::new();
-    if disk.read_bps > 0 || disk.write_bps > 0 {
-        lines.push(format!(
-            "↓{}/s  ↑{}/s",
-            bytes_short(disk.read_bps),
-            bytes_short(disk.write_bps)
-        ));
-    }
-    if show_volumes {
-        for vol in disk
-            .volumes
-            .iter()
-            .skip(usize::from(disk.primary().is_some()))
-        {
-            if disk.primary().is_some_and(|p| p.mount == vol.mount) {
-                continue;
-            }
-            lines.push(format!(
-                "{}  {} / {}",
-                vol.name,
-                bytes_short(vol.used_bytes),
-                bytes_short(vol.total_bytes)
-            ));
-        }
-    }
-    lines
 }
 
 #[cfg(test)]

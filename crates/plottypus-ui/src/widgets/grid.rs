@@ -126,22 +126,31 @@ pub fn pack(area: Rect, bands: &[Band]) -> Pack {
             leftover = leftover.saturating_sub(give);
         }
     }
-    for (i, band) in live.iter().enumerate() {
-        if leftover == 0 {
-            break;
+    let takers: Vec<usize> = live
+        .iter()
+        .enumerate()
+        .filter(|(_, band)| band.take_leftover)
+        .map(|(i, _)| i)
+        .collect();
+    let mut progressed = !takers.is_empty();
+    while leftover > 0 && progressed {
+        progressed = false;
+        for &i in &takers {
+            if leftover == 0 {
+                break;
+            }
+            let cap = live[i].max_height.unwrap_or(u16::MAX);
+            if heights[i] < cap {
+                heights[i] = heights[i].saturating_add(1);
+                leftover = leftover.saturating_sub(1);
+                progressed = true;
+            }
         }
-        if !band.take_leftover {
-            continue;
-        }
-        let cap = band.max_height.unwrap_or(u16::MAX);
-        let room = cap.saturating_sub(heights[i]);
-        let give = room.min(leftover);
-        heights[i] = heights[i].saturating_add(give);
-        leftover = leftover.saturating_sub(give);
     }
-    for (i, band) in live.iter().enumerate() {
-        if let Some(cap) = band.max_height {
-            heights[i] = heights[i].min(cap);
+    if leftover > 0 {
+        let target = takers.last().copied().unwrap_or(0);
+        if let Some(h) = heights.get_mut(target) {
+            *h = h.saturating_add(leftover);
         }
     }
 
@@ -355,6 +364,43 @@ mod tests {
         assert_eq!(cpu.rect.height, 4);
         assert_eq!(pack.get(10).expect("zone").rect.height, 9);
         assert_eq!(pack.get(30).expect("strip").rect.height, 8);
+    }
+
+    #[test]
+    fn pack_shares_leftover_across_takers() {
+        let bands = [
+            Band {
+                take_leftover: true,
+                ..Band::new(4, vec![graph(0, "super"), graph(1, "perf")])
+            },
+            Band {
+                take_leftover: true,
+                ..Band::new(5, vec![graph(10, "super zone"), graph(11, "perf zone")])
+            },
+        ];
+        let pack = pack(Rect::new(0, 0, 78, 21), &bands);
+        let usage = pack.get(0).expect("super");
+        let zone = pack.get(10).expect("zone");
+        assert_eq!(usage.rect.height, 10);
+        assert_eq!(zone.rect.height, 11);
+        assert_eq!(
+            usage.rect.height.saturating_add(zone.rect.height),
+            21,
+            "sibling bands must fill the pane"
+        );
+    }
+
+    #[test]
+    fn pack_fills_the_pane_when_heat_band_is_absent() {
+        let bands = [Band {
+            max_height: Some(4),
+            take_leftover: false,
+            ..Band::new(4, vec![graph(0, "cpu"), graph(1, "super")])
+        }];
+        let pack = pack(Rect::new(0, 0, 78, 21), &bands);
+        let cpu = pack.get(0).expect("cpu");
+        assert_eq!(cpu.rect.height, 21, "unused leftover must fill the pane");
+        assert_eq!(pack.get(1).expect("super").rect.height, 21);
     }
 
     #[test]

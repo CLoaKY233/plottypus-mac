@@ -791,6 +791,99 @@ mod render_tests {
         assert!(!text.contains("E0 36°"), "{text}");
     }
 
+    fn last_braille_row(buf: &ratatui::buffer::Buffer, rect: ratatui::layout::Rect) -> Option<u16> {
+        let end = rect.y.saturating_add(rect.height);
+        (rect.y..end).rev().find(|&y| {
+            (rect.x..rect.x.saturating_add(rect.width)).any(|x| {
+                buf[(x, y)]
+                    .symbol()
+                    .chars()
+                    .next()
+                    .is_some_and(|c| ('\u{2801}'..='\u{28FF}').contains(&c))
+            })
+        })
+    }
+
+    fn row_text(buf: &ratatui::buffer::Buffer, rect: ratatui::layout::Rect, y: u16) -> String {
+        let mut out = String::new();
+        for x in rect.x..rect.x.saturating_add(rect.width) {
+            out.push_str(buf[(x, y)].symbol());
+        }
+        out
+    }
+
+    #[test]
+    fn compact_sibling_graphs_share_a_baseline() {
+        let mut fx = fixture("");
+        fx.ready = true;
+        fx.snap.gpu = Some(GpuSnapshot {
+            scaled: 0.16,
+            ..GpuSnapshot::default()
+        });
+        fx.snap.sensors.e_c = Some(48.0);
+        fx.snap.sensors.p_c = Some(62.0);
+        fx.snap.memory.used_bytes = 18 * 1024 * 1024 * 1024;
+        fx.snap.memory.total_bytes = 36 * 1024 * 1024 * 1024;
+        fx.snap.disk = DiskSnapshot {
+            volumes: vec![DiskVolume {
+                name: String::from("Macintosh HD"),
+                mount: String::from("/"),
+                used_bytes: 400 * 1024 * 1024 * 1024,
+                total_bytes: 926 * 1024 * 1024 * 1024,
+            }],
+            read_bps: 0,
+            write_bps: 0,
+        };
+        for v in [0.12, 0.24, 0.36, 0.48] {
+            fx.cpu.push(v);
+            fx.gpu.push(v * 0.5);
+            fx.mem.push(v);
+            fx.cpu_temp.push(40.0 + v * 30.0);
+            fx.net_rx.push(v * 8_000.0);
+            fx.disk.push(v * 1_024.0);
+        }
+        let view = fx.view();
+        let area = ratatui::layout::Rect::new(0, 0, 140, 36);
+        let layout = crate::layout::plan(area, Surface::Work, view.flags());
+        let backend = TestBackend::new(140, 36);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render_app(frame, &view)).unwrap();
+        let buf = terminal.backend().buffer();
+
+        let last_inner =
+            |rect: ratatui::layout::Rect| rect.y.saturating_add(rect.height).saturating_sub(2);
+        let cpu = layout.cpu.expect("cpu");
+        let gpu = layout.gpu.expect("gpu");
+        assert_eq!(cpu.y, gpu.y);
+        assert_eq!(
+            last_braille_row(buf, cpu),
+            Some(last_inner(cpu)),
+            "cpu graph must fill to the bottom border"
+        );
+        assert_eq!(
+            last_braille_row(buf, gpu),
+            Some(last_inner(gpu)),
+            "gpu graph must fill to the bottom border"
+        );
+
+        let mem = layout.mem.expect("mem");
+        let fans = layout.fans.expect("sens");
+        assert_eq!(mem.y, fans.y);
+        assert_eq!(last_braille_row(buf, mem), Some(last_inner(mem)));
+        assert_eq!(last_braille_row(buf, fans), Some(last_inner(fans)));
+        let fans_inner = row_text(buf, fans, fans.y.saturating_add(1));
+        assert!(
+            !fans_inner.contains("e 48") && !fans_inner.contains("48°"),
+            "sens numbers stay in the title, not a row above the graph: {fans_inner}"
+        );
+
+        let net = layout.net.expect("net");
+        let disk = layout.disk.expect("disk");
+        assert_eq!(net.y, disk.y);
+        assert_eq!(last_braille_row(buf, net), Some(last_inner(net)));
+        assert_eq!(last_braille_row(buf, disk), Some(last_inner(disk)));
+    }
+
     #[test]
     fn compact_sens_sparks_at_80x24_minimal() {
         let mut fx = fixture("");
@@ -808,10 +901,10 @@ mod render_tests {
         assert_eq!(layout.degrade, crate::layout::Degrade::Minimal);
         assert!(layout.fans.is_some());
         let text = paint(&view, 80, 24);
-        assert!(text.contains("48°"), "{text}");
-        assert!(text.contains("62°"), "{text}");
-        assert!(text.contains('e'), "{text}");
-        assert!(text.contains('p'), "{text}");
+        assert!(
+            text.contains("71°"),
+            "hottest zone rides in the title: {text}"
+        );
         let has_spark = text.chars().any(|c| ('\u{2801}'..='\u{28FF}').contains(&c));
         assert!(has_spark, "SENS at 80x24 Minimal must keep a spark: {text}");
     }
@@ -995,7 +1088,7 @@ mod render_tests {
         let text = paint(&fx.view(), 160, 40);
         assert!(
             text.contains("nand"),
-            "extras belong on the right rail: {text}"
+            "extras belong in the readings list: {text}"
         );
         assert!(text.contains("38°"), "{text}");
     }

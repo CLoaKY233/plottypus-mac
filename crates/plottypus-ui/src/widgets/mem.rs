@@ -1,14 +1,12 @@
 use plottypus_core::{MemorySnapshot, Scale, bytes_short};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 
 use crate::chrome::{
     Axis, Graph, GraphInk, panel_block, push_token, render_fill_bar, render_scaled_graph,
 };
 
-use crate::layout::Degrade;
 use crate::layout::Panel;
 use crate::theme::Theme;
 use crate::widgets::AppView;
@@ -28,39 +26,11 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
         return;
     }
 
-    let minimal = view.degrade == Degrade::Minimal;
-    let specs = spec_items(mem);
-    let show_specs = !minimal && area.height >= 5 && !specs.is_empty();
-    let (body, spec_col) = if show_specs && inner.width >= 50 {
-        let cols = Layout::horizontal([
-            Constraint::Fill(1),
-            Constraint::Length(1),
-            Constraint::Length(16),
-        ])
-        .split(inner);
-        (cols[0], Some(cols[2]))
-    } else {
-        (inner, None)
-    };
-
-    let spec_h = if show_specs && spec_col.is_none() {
-        let room = body.height.saturating_sub(2);
-        u16::try_from(specs.len()).unwrap_or(0).min(room)
-    } else {
-        0
-    };
-    let (plot, spec_row) = if spec_h > 0 {
-        let rows = Layout::vertical([Constraint::Fill(1), Constraint::Length(spec_h)]).split(body);
-        (rows[0], Some(rows[1]))
-    } else {
-        (body, None)
-    };
-
     let ratio = mem_ratio(mem.used_bytes, mem.total_bytes);
-    if plot.height >= 2 {
+    if inner.height >= 2 {
         render_scaled_graph(
             frame,
-            plot,
+            inner,
             Graph {
                 history: view.mem_history,
                 accent: theme.mem,
@@ -71,17 +41,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) 
             },
         );
     } else {
-        render_fill_bar(frame, plot, ratio, theme.mem);
-    }
-    let spec_area = spec_col.or(spec_row);
-    if let Some(spec_area) = spec_area {
-        let take = usize::from(spec_area.height);
-        let lines: Vec<Line> = specs
-            .iter()
-            .take(take)
-            .map(|s| Line::from(Span::styled(s.clone(), theme.dim())))
-            .collect();
-        frame.render_widget(Paragraph::new(lines), spec_area);
+        render_fill_bar(frame, inner, ratio, theme.mem);
     }
 }
 
@@ -96,6 +56,7 @@ fn title(mem: &MemorySnapshot, theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
+#[cfg(test)]
 fn spec_items(mem: &MemorySnapshot) -> Vec<String> {
     let mut items = Vec::new();
     if mem.wired_bytes > 0 {
