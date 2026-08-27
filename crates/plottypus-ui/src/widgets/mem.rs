@@ -56,28 +56,6 @@ fn title(mem: &MemorySnapshot, theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
-#[cfg(test)]
-fn spec_items(mem: &MemorySnapshot) -> Vec<String> {
-    let mut items = Vec::new();
-    if mem.wired_bytes > 0 {
-        items.push(format!("wired {}", bytes_short(mem.wired_bytes)));
-    }
-    if mem.compressed_bytes > 0 {
-        items.push(format!("compr {}", bytes_short(mem.compressed_bytes)));
-    }
-    if mem.cache_bytes > 0 {
-        items.push(format!("cache {}", bytes_short(mem.cache_bytes)));
-    }
-    if mem.swap_used_bytes > 0 || mem.swap_total_bytes > 0 {
-        items.push(format!(
-            "swap {} / {}",
-            bytes_short(mem.swap_used_bytes),
-            bytes_short(mem.swap_total_bytes)
-        ));
-    }
-    items
-}
-
 fn mem_ratio(used: u64, total: u64) -> f32 {
     if total == 0 {
         0.0
@@ -109,17 +87,6 @@ mod tests {
         assert!(text.contains("36.0G"));
         assert!(text.contains('●'));
         assert!(!text.contains("nominal"));
-    }
-
-    #[test]
-    fn specs_only_nonzero() {
-        let mut mem = MemorySnapshot::default();
-        assert!(spec_items(&mem).is_empty());
-        mem.wired_bytes = 8 * 1024 * 1024 * 1024;
-        mem.swap_used_bytes = 512 * 1024 * 1024;
-        mem.swap_total_bytes = 2 * 1024 * 1024 * 1024;
-        let items = spec_items(&mem);
-        assert_eq!(items, ["wired 8.0G", "swap 512M / 2.0G"]);
     }
 
     #[test]

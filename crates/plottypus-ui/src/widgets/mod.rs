@@ -670,6 +670,41 @@ mod render_tests {
     }
 
     #[test]
+    fn expand_cpu_tall_without_zones_fills() {
+        let mut fx = fixture("");
+        fx.expanded = Some(Panel::Cpu);
+        fx.snap.gpu = Some(GpuSnapshot {
+            scaled: 0.16,
+            ..GpuSnapshot::default()
+        });
+        fx.snap.cpu.cores = vec![CoreSample {
+            kind: ClusterKind::Performance,
+            index: 0,
+            scaled: 0.4,
+            active: 0.4,
+        }];
+        fx.snap.sensors.e_c = None;
+        fx.snap.sensors.p_c = None;
+        fx.snap.sensors.s_c = None;
+        fx.snap.cpu.temp_c = None;
+        for v in [0.1, 0.2, 0.3, 0.4, 0.5] {
+            fx.p_load.push(v);
+            fx.cpu.push(v);
+        }
+        let text = paint(&fx.view(), 160, 44);
+        assert!(text.contains("performance"), "{text}");
+        assert!(!text.contains("zone"), "{text}");
+        let has_spark = text.chars().any(|c| ('\u{2801}'..='\u{28FF}').contains(&c));
+        assert!(has_spark, "usage graph must paint: {text}");
+        let last = text.lines().nth(41).unwrap_or("");
+        assert!(
+            last.chars()
+                .any(|c| ('\u{2801}'..='\u{28FF}').contains(&c) || c == '│'),
+            "bottom of a 44-row expand must still be graph or border, not empty: {last}"
+        );
+    }
+
+    #[test]
     fn expand_cpu_wide_lists_per_core_percent() {
         let mut fx = fixture("");
         fx.expanded = Some(Panel::Cpu);

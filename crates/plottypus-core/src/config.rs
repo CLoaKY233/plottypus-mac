@@ -8,6 +8,11 @@ pub const INTERVAL_MID: Duration = Duration::from_millis(500);
 pub const INTERVAL_SLOW: Duration = Duration::from_secs(1);
 pub const INTERVAL_DEFAULT: Duration = INTERVAL_FAST;
 
+/// Visible history on every graph. Ring length is `window / series period`,
+/// so changing a clock later cannot silently stretch the window.
+pub const HISTORY_WINDOW: Duration = Duration::from_secs(15 * 60);
+pub const SENSOR_PERIOD: Duration = Duration::from_secs(2);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProcSort {
     #[default]

@@ -115,27 +115,28 @@ impl App {
     fn new() -> Result<Self> {
         let config = prefs_path().map_or_else(Config::default, |path| Config::load(&path));
         let proc_ratio = config.proc_ratio;
-        let worker = worker::spawn(config.interval)?;
+        let interval = config.interval;
+        let worker = worker::spawn(interval)?;
         let mut app = Self {
             config,
             worker,
             snapshot: Snapshot::empty(),
-            cpu_history: History::cheap(),
-            gpu_history: History::cheap(),
-            mem_history: History::cheap(),
-            net_rx_history: History::cheap(),
-            net_tx_history: History::cheap(),
-            disk_history: History::cheap(),
-            disk_read_history: History::cheap(),
-            disk_write_history: History::cheap(),
-            cpu_temp_history: History::default(),
-            gpu_temp_history: History::default(),
-            e_temp_history: History::default(),
-            p_temp_history: History::default(),
-            s_temp_history: History::default(),
-            e_load_history: History::cheap(),
-            p_load_history: History::cheap(),
-            s_load_history: History::cheap(),
+            cpu_history: History::for_period(interval),
+            gpu_history: History::for_period(interval),
+            mem_history: History::for_period(interval),
+            net_rx_history: History::for_period(interval),
+            net_tx_history: History::for_period(interval),
+            disk_history: History::for_period(interval),
+            disk_read_history: History::for_period(interval),
+            disk_write_history: History::for_period(interval),
+            cpu_temp_history: History::for_period(plottypus_core::SENSOR_PERIOD),
+            gpu_temp_history: History::for_period(plottypus_core::SENSOR_PERIOD),
+            e_temp_history: History::for_period(plottypus_core::SENSOR_PERIOD),
+            p_temp_history: History::for_period(plottypus_core::SENSOR_PERIOD),
+            s_temp_history: History::for_period(plottypus_core::SENSOR_PERIOD),
+            e_load_history: History::for_period(interval),
+            p_load_history: History::for_period(interval),
+            s_load_history: History::for_period(interval),
             fan_histories: Vec::new(),
             surface: Surface::Work,
             focus: Focus::Processes,
@@ -163,6 +164,28 @@ impl App {
             Err(_) => {}
         }
         Ok(app)
+    }
+
+    fn set_interval(&mut self, interval: std::time::Duration) {
+        self.config.interval = interval;
+        let cap = plottypus_core::capacity_for(interval);
+        for history in [
+            &mut self.cpu_history,
+            &mut self.gpu_history,
+            &mut self.mem_history,
+            &mut self.net_rx_history,
+            &mut self.net_tx_history,
+            &mut self.disk_history,
+            &mut self.disk_read_history,
+            &mut self.disk_write_history,
+            &mut self.e_load_history,
+            &mut self.p_load_history,
+            &mut self.s_load_history,
+        ] {
+            history.set_capacity(cap);
+        }
+        let _ = self.worker.cmds.send(Cmd::Interval(interval));
+        self.touch();
     }
 
     fn touch(&mut self) {
@@ -359,11 +382,7 @@ impl App {
                     self.arm_kill();
                 }
             }
-            Event::CycleInterval => {
-                self.config.interval = self.config.cycle_interval();
-                let _ = self.worker.cmds.send(Cmd::Interval(self.config.interval));
-                self.touch();
-            }
+            Event::CycleInterval => self.set_interval(self.config.cycle_interval()),
             Event::Freeze => {
                 self.frozen = !self.frozen;
                 let _ = self.worker.cmds.send(Cmd::Paused(self.frozen));
@@ -441,11 +460,7 @@ impl App {
     fn handle_settings(&mut self, event: Event) {
         match event {
             Event::Settings => self.settings = false,
-            Event::CycleInterval => {
-                self.config.interval = self.config.cycle_interval();
-                let _ = self.worker.cmds.send(Cmd::Interval(self.config.interval));
-                self.touch();
-            }
+            Event::CycleInterval => self.set_interval(self.config.cycle_interval()),
             Event::ToggleGpu => {
                 self.config.show_gpu = !self.config.show_gpu;
                 self.touch();
@@ -891,7 +906,7 @@ fn hop_ready(flags: LayoutFlags, panel: Panel) -> bool {
 fn push_fans(histories: &mut Vec<History>, fans: &[plottypus_core::FanMetric]) {
     let n = fans.len().min(4);
     while histories.len() < n {
-        histories.push(History::default());
+        histories.push(History::for_period(plottypus_core::SENSOR_PERIOD));
     }
     for (i, fan) in fans.iter().take(n).enumerate() {
         if let Some(history) = histories.get_mut(i) {

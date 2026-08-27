@@ -8,7 +8,6 @@ Apple Silicon system monitor TUI (`plottypus`). macOS-first: metrics collectors 
 cargo fmt --all                      # required step; default rustfmt settings (no rustfmt.toml)
 cargo clippy --workspace --all-targets   # must be clean
 cargo test --workspace               # NOT plain `cargo test`: default-members is the bin crate only
-                                     # CI runs this with -- --test-threads=1 (live IOKit contends)
 cargo run -p plottypus
 ```
 

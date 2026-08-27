@@ -1,9 +1,14 @@
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use plottypus_core::{
-    Cluster, ClusterKind, CoreSample, CpuSnapshot, FanSnapshot, Process, Result, Sampled,
-    SensorsSnapshot, Snapshot, SocInfo, Thermal,
+    Cluster, ClusterKind, CoreSample, CpuSnapshot, FanSnapshot, Process, Result, SENSOR_PERIOD,
+    Sampled, SensorsSnapshot, Snapshot, SocInfo, Thermal,
 };
+
+/// `IOKit` SMC/HID is exclusive per process. Two live `Sampler`s time out
+/// `recv` in parallel tests; this gate holds for the `Sampler` lifetime.
+static IO_GATE: Mutex<()> = Mutex::new(());
 
 use crate::cpu::CpuCollector;
 use crate::disk::DiskCollector;
@@ -14,7 +19,6 @@ use crate::process::ProcessCollector;
 use crate::{memory, soc, thermal};
 
 const PROCS_EVERY: Duration = Duration::from_secs(1);
-const SENSORS_EVERY: Duration = Duration::from_secs(2);
 
 fn fill_missing_temps(snap: &mut Snapshot) {
     if snap.cpu.temp_c.is_none() {
@@ -71,6 +75,7 @@ fn summarize_cluster(cores: &[CoreSample], kind: ClusterKind) -> Option<Cluster>
 }
 
 pub struct Sampler {
+    _io: MutexGuard<'static, ()>,
     soc: SocInfo,
     cpu: CpuCollector,
     processes: ProcessCollector,
@@ -88,7 +93,11 @@ pub struct Sampler {
 
 impl Sampler {
     pub fn new() -> Result<Self> {
+        let io = IO_GATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(Self {
+            _io: io,
             soc: soc::info(),
             cpu: CpuCollector::new(),
             processes: ProcessCollector::new(),
@@ -112,7 +121,7 @@ impl Sampler {
             .is_none_or(|t| now.duration_since(t) >= PROCS_EVERY);
         let sensors_due = self
             .last_sensors
-            .is_none_or(|t| now.duration_since(t) >= SENSORS_EVERY);
+            .is_none_or(|t| now.duration_since(t) >= SENSOR_PERIOD);
 
         let mut snap = Snapshot::empty();
         snap.soc = self.soc.clone();

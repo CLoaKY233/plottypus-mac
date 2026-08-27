@@ -827,52 +827,84 @@ fn paint_meta_bottom(
     }
 }
 
-fn paint_meta_left(frame: &mut Frame, area: Rect, panel: Panel, view: &AppView<'_>, theme: &Theme) {
+struct LeftSlots {
+    identity: u16,
+    hop_rects: Vec<(u8, Panel, Rect)>,
+    cores: Option<Rect>,
+}
+
+fn left_slots(area: Rect, panel: Panel, view: &AppView<'_>) -> LeftSlots {
     let hops = hop_targets(panel, view);
-    let hop_h = 3u16.saturating_mul(u16::try_from(hops.len()).unwrap_or(0));
-    let cores = view.show_cores && panel == Panel::Cpu && has_any_cluster(view);
-    let cores_min = if cores { 3 } else { 0 };
-    let keep = hop_h.saturating_add(cores_min);
-    let end = area.y.saturating_add(area.height);
-    let mut y = area.y;
-    for line in identity_lines(panel, view) {
-        if y.saturating_add(1).saturating_add(keep) > end {
-            break;
+    let ident_n = u16::try_from(identity_lines(panel, view).len()).unwrap_or(0);
+    let hop_n = u16::try_from(hops.len()).unwrap_or(0);
+    let hop_min = 3u16.saturating_mul(hop_n);
+    let cores_want = if view.show_cores && panel == Panel::Cpu {
+        u16::try_from(view.snapshot.cpu.cores.len()).unwrap_or(0)
+    } else {
+        0
+    };
+    let cores_min = u16::from(cores_want > 0);
+    let keep_after_ident = hop_min.saturating_add(cores_min);
+    let ident = ident_n.min(area.height.saturating_sub(keep_after_ident));
+    let rest = area.height.saturating_sub(ident);
+    let cores_h = cores_want.min(rest.saturating_sub(hop_min));
+    let hop_space = rest.saturating_sub(cores_h);
+    let mut hop_rects = Vec::new();
+    let mut y = area.y.saturating_add(ident);
+    if hop_n > 0 && hop_space >= 3 {
+        let base = hop_space / hop_n;
+        let extra = hop_space % hop_n;
+        for (i, (id, hop)) in hops.into_iter().enumerate() {
+            let h = base.saturating_add(u16::from(i < extra as usize)).max(3);
+            let h = h.min(area.y.saturating_add(area.height).saturating_sub(y));
+            if h < 3 {
+                break;
+            }
+            hop_rects.push((
+                id,
+                hop,
+                Rect {
+                    x: area.x,
+                    y,
+                    width: area.width,
+                    height: h,
+                },
+            ));
+            y = y.saturating_add(h);
         }
+    }
+    let cores = if cores_h > 0 {
+        Some(Rect {
+            x: area.x,
+            y,
+            width: area.width,
+            height: cores_h,
+        })
+    } else {
+        None
+    };
+    LeftSlots {
+        identity: ident,
+        hop_rects,
+        cores,
+    }
+}
+
+fn paint_meta_left(frame: &mut Frame, area: Rect, panel: Panel, view: &AppView<'_>, theme: &Theme) {
+    let slots = left_slots(area, panel, view);
+    for (i, line) in identity_lines(panel, view)
+        .into_iter()
+        .take(usize::from(slots.identity))
+        .enumerate()
+    {
+        let y = area.y.saturating_add(u16::try_from(i).unwrap_or(0));
         paint_dim_line(frame, area.x, y, area.width, line, theme);
-        y = y.saturating_add(1);
     }
-    for (id, hop) in &hops {
-        if y.saturating_add(3) > end {
-            break;
-        }
-        paint_one_hop(
-            frame,
-            Rect {
-                x: area.x,
-                y,
-                width: area.width,
-                height: 3,
-            },
-            *id,
-            *hop,
-            view,
-            theme,
-        );
-        y = y.saturating_add(3);
+    for (id, hop, rect) in slots.hop_rects {
+        paint_one_hop(frame, rect, id, hop, view, theme);
     }
-    if cores && end.saturating_sub(y) >= 1 {
-        paint_cores(
-            frame,
-            Rect {
-                x: area.x,
-                y,
-                width: area.width,
-                height: end.saturating_sub(y),
-            },
-            view,
-            theme,
-        );
+    if let Some(cores) = slots.cores {
+        paint_cores(frame, cores, view, theme);
     }
 }
 
@@ -1086,27 +1118,10 @@ fn meta_hop_hit(
                 row,
             )
         }
-        MetaSide::Left => {
-            let hop_h = 3u16.saturating_mul(u16::try_from(hops.len()).unwrap_or(0));
-            let cores_min = if view.show_cores && panel == Panel::Cpu && has_any_cluster(view) {
-                3
-            } else {
-                0
-            };
-            let keep = hop_h.saturating_add(cores_min);
-            let mut y = area.y;
-            let end = area.y.saturating_add(area.height);
-            let n = u16::try_from(identity_lines(panel, view).len()).unwrap_or(0);
-            let fit = n.min(end.saturating_sub(y.saturating_add(keep)));
-            y = y.saturating_add(fit);
-            for (_, hop) in hops {
-                if row >= y && row < y.saturating_add(3) {
-                    return Some(hop);
-                }
-                y = y.saturating_add(3);
-            }
-            None
-        }
+        MetaSide::Left => left_slots(area, panel, view)
+            .hop_rects
+            .into_iter()
+            .find_map(|(_, hop, rect)| rect_contains(rect, col, row).then_some(hop)),
     }
 }
 
@@ -2009,6 +2024,44 @@ mod tests {
         assert_eq!(usage.rect.height.saturating_add(zone.rect.height), 30);
         assert!(usage.rect.height >= 10, "got {}", usage.rect.height);
         assert!(zone.rect.height >= 10, "got {}", zone.rect.height);
+    }
+
+    #[test]
+    fn pack_cpu_without_zones_fills_a_tall_pane() {
+        use crate::widgets::grid::pack;
+        let mut fx = fixture("");
+        fx.snap.cpu.cores = vec![plottypus_core::CoreSample {
+            kind: plottypus_core::ClusterKind::Performance,
+            index: 0,
+            scaled: 0.4,
+            active: 0.4,
+        }];
+        fx.snap.sensors.e_c = None;
+        fx.snap.sensors.p_c = None;
+        fx.snap.sensors.s_c = None;
+        fx.snap.sensors.cpu_c = None;
+        fx.snap.cpu.temp_c = None;
+        let packed = pack(Rect::new(0, 0, 130, 40), &super::cpu_bands(&fx.view()));
+        let usage = packed.get(super::ID_PERF_LOAD).expect("performance");
+        assert_eq!(usage.rect.height, 40, "usage must fill when heat is absent");
+        assert!(packed.get(super::ID_SUPER_ZONE).is_none());
+        assert!(packed.get(super::ID_PACKAGE).is_none());
+    }
+
+    #[test]
+    fn pack_gpu_without_temp_fills_a_tall_pane() {
+        use crate::widgets::grid::pack;
+        let mut fx = fixture("");
+        fx.snap.gpu = Some(plottypus_core::GpuSnapshot {
+            scaled: 0.16,
+            temp_c: None,
+            ..plottypus_core::GpuSnapshot::default()
+        });
+        fx.snap.sensors.gpu_c = None;
+        let packed = pack(Rect::new(0, 0, 130, 40), &super::gpu_bands(&fx.view()));
+        let util = packed.get(super::ID_GPU_UTIL).expect("util");
+        assert_eq!(util.rect.height, 40);
+        assert!(packed.get(super::ID_GPU_TEMP).is_none());
     }
 
     #[test]

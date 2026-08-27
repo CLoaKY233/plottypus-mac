@@ -76,62 +76,11 @@ fn busy_span(view: &AppView<'_>, theme: &Theme, spans: &mut Vec<Span<'static>>) 
     }
 }
 
-#[cfg(test)]
-fn spec_line(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
-    let mut spans = Vec::new();
-    let name = view.snapshot.soc.name.trim();
-    if !name.is_empty() {
-        push_token(&mut spans, name.to_owned(), theme.fg());
-    }
-    if let Some(cores) = core_label(
-        view.snapshot.soc.e_cores,
-        view.snapshot.soc.p_cores,
-        view.snapshot.soc.s_cores,
-    ) {
-        push_token(&mut spans, cores, theme.dim());
-    }
-    if let Some(mhz) = view.snapshot.cpu.freq_mhz.filter(|mhz| *mhz > 0) {
-        push_token(&mut spans, freq_label(mhz), theme.dim());
-    }
-    if view.frozen {
-        push_token(&mut spans, String::from("paused"), theme.dim());
-    }
-    Line::from(spans)
-}
-
 fn ready_pct(ready: bool, ratio: f32) -> String {
     if ready {
         percent_display(ratio)
     } else {
         String::from("…")
-    }
-}
-
-#[cfg(test)]
-fn core_label(e_cores: u8, p_cores: u8, s_cores: u8) -> Option<String> {
-    let mut parts = Vec::new();
-    if e_cores > 0 {
-        parts.push(format!("{e_cores}E"));
-    }
-    if p_cores > 0 {
-        parts.push(format!("{p_cores}P"));
-    }
-    if s_cores > 0 {
-        parts.push(format!("{s_cores}S"));
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(" + "))
-    }
-}
-
-#[cfg(test)]
-fn freq_label(mhz: u32) -> String {
-    if mhz >= 1000 {
-        format!("{:.1}GHz", f64::from(mhz) / 1000.0)
-    } else {
-        format!("{mhz}MHz")
     }
 }
 
@@ -217,36 +166,6 @@ mod tests {
         fx.snap.sensors.cpu_c = Some(38.0);
         let text = line_text(&title(&fx.view(), &Theme::default()));
         assert!(text.contains("38°"), "{text}");
-    }
-
-    #[test]
-    fn specs_show_soc_and_hide_nominal() {
-        let mut fx = fixture("");
-        fx.snap.cpu.temp_c = Some(42.0);
-        fx.snap.cpu.freq_mhz = Some(3200);
-        fx.snap.thermal = Thermal::Nominal;
-        let text = line_text(&spec_line(&fx.view(), &Theme::default()));
-        assert!(text.contains("M4 Pro"));
-        assert!(text.contains("4E + 8P"));
-        assert!(text.contains("3.2GHz"));
-    }
-
-    #[test]
-    fn specs_mark_paused_and_thermal() {
-        let mut fx = fixture("");
-        fx.frozen = true;
-        fx.snap.thermal = Thermal::Fair;
-        let text = line_text(&spec_line(&fx.view(), &Theme::default()));
-        assert!(text.contains("paused"));
-    }
-
-    #[test]
-    fn core_label_omits_zeros() {
-        assert_eq!(core_label(4, 8, 0).as_deref(), Some("4E + 8P"));
-        assert_eq!(core_label(4, 0, 0).as_deref(), Some("4E"));
-        assert_eq!(core_label(0, 8, 0).as_deref(), Some("8P"));
-        assert_eq!(core_label(0, 12, 6).as_deref(), Some("12P + 6S"));
-        assert_eq!(core_label(0, 0, 0), None);
     }
 
     #[test]

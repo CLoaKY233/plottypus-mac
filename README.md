@@ -40,6 +40,8 @@ cargo install --path crates/plottypus
 
 Other platforms compile (the collectors are stubbed out) but sample nothing — this is an Apple Silicon tool.
 
+`cargo test --workspace` is the default suite. Live `Sampler` tests take an exclusive IOKit lock so two collectors cannot open SMC/HID at once; they run in parallel with everything else, just not with each other.
+
 ## Usage
 
 ```sh

@@ -61,38 +61,11 @@ fn title(view: &AppView<'_>, theme: &Theme) -> Line<'static> {
     spans
 }
 
-#[cfg(test)]
-fn spec_items(view: &AppView<'_>) -> Vec<String> {
-    let Some(gpu) = view.snapshot.gpu else {
-        return Vec::new();
-    };
-    let mut items = Vec::new();
-    if let Some(mhz) = gpu.freq_mhz.filter(|mhz| *mhz > 0) {
-        items.push(freq_label(mhz));
-    }
-    if let Some(watts) = gpu.ane_watts.filter(|w| *w > 0.0) {
-        items.push(format!("ane {}", watts_display(watts)));
-    }
-    if view.snapshot.soc.gpu_cores > 0 {
-        items.push(format!("{}c", view.snapshot.soc.gpu_cores));
-    }
-    items
-}
-
 fn ready_pct(ready: bool, ratio: f32) -> String {
     if ready {
         percent_display(ratio)
     } else {
         String::from("…")
-    }
-}
-
-#[cfg(test)]
-fn freq_label(mhz: u32) -> String {
-    if mhz >= 1000 {
-        format!("{:.1}GHz", f64::from(mhz) / 1000.0)
-    } else {
-        format!("{mhz}MHz")
     }
 }
 
@@ -144,8 +117,6 @@ mod tests {
         let text = line_text(&title(&fx.view(), &theme));
         assert!(text.contains("12%"));
         assert!(text.contains("1.1W"));
-        let specs = spec_items(&fx.view());
-        assert_eq!(specs, ["461MHz", "ane 0.4W", "16c"]);
     }
 
     #[test]
@@ -198,17 +169,5 @@ mod tests {
         let text = line_text(&title(&fx.view(), &Theme::default()));
         assert!(text.contains('…'));
         assert!(!text.contains('%'));
-    }
-
-    #[test]
-    fn specs_stay_sparse() {
-        let mut fx = fixture("");
-        fx.snap.gpu = Some(GpuSnapshot {
-            freq_mhz: Some(0),
-            ane_watts: Some(0.0),
-            ..GpuSnapshot::default()
-        });
-        fx.snap.soc.gpu_cores = 0;
-        assert!(spec_items(&fx.view()).is_empty());
     }
 }

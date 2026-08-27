@@ -42,12 +42,12 @@ used-ratio. Tab / ← → while expanded hops the related family (`cpu ↔ gpu �
 
 | Panel | Compact | Expanded | Graph |
 | --- | --- | --- | --- |
-| cpu | % + busy (if scaled≠active) + °C + thermal word + SoC spec | overall + cluster load graphs, zone °C graphs, live cluster bars, cores if room | load auto (10% floor); zone/package °C band |
-| gpu | % + °C + watts if present + core count | util + die °C graphs; related CPU/SENS sparks | util auto (10% floor); temp band |
-| mem | used/total + pressure + spark when inner ≥ 2; specs follow Degrade | used graph, composition bars, hop to proc | used % fixed 0–100 |
-| net | iface ↓ ↑ | down / up graphs; hop to disk | rx + tx bits, auto scale |
-| disk | volume used/total bar + R/W | read/write I/O graphs + volumes; hop to net | I/O bytes, auto scale |
-| sens | named zone °C + fan RPM + spark when inner ≥ 2 (Glance stays numbers) | zone + package + GPU °C graphs, per-fan RPM, related CPU/GPU sparks | fans RPM auto; temps band |
+| cpu | title `%` + busy (if scaled≠active) + °C + thermal; body is the load graph | cluster load graphs (or overall if no clusters), zone °C if live else package, per-core `%` in the meta column | load auto (10% floor); zone/package °C band |
+| gpu | title `%` + °C + watts if present; body is the util graph | util + die °C if live; related CPU/SENS hops | util auto (10% floor); temp band |
+| mem | title used/total + pressure; body is the used graph when inner ≥ 2 | used graph, composition bars, hop to proc | used % fixed 0–100 |
+| net | title iface ↓ ↑; body is the rx graph | down / up graphs; hop to disk | rx + tx bits, auto scale |
+| disk | title volume used/total; body is the I/O graph when inner ≥ 2 (bar if shorter) | read/write I/O graphs + volumes; hop to net | I/O bytes, auto scale |
+| sens | title zone °C + fan RPM; spark when inner ≥ 2 (Glance stays numbers) | zone + package + GPU °C graphs, per-fan RPM, related CPU/GPU hops | fans RPM auto; temps band |
 | proc | pid name cpu% mem (+ threads) | same table + dossier (identity, live, command, cpu spark, family) | per-pid cpu spark in dossier |
 
 ## 3. Component hierarchy
@@ -55,11 +55,11 @@ used-ratio. Tab / ← → while expanded hops the related family (`cpu ↔ gpu �
 ```
 Surface (Work | Glance)
 └── Panel (bordered, titled, ↗ / × corner mark, focus ring on border color)
-    ├── compact view   — title tokens + graph + optional subline
+    ├── compact view   — title tokens + graph (no spec subline)
     └── expanded view  — `grid::pack` of graph-first cells
         ├── usage / zone graphs : title carries the live number
-        ├── related sparks      : hoppable (`→`)
-        └── cluster / list      : bars, mosaics, volumes
+        ├── related hops        : hoppable (`→`), left column when wide
+        └── cluster / list      : per-core `%` bars, volumes
 Footer (contextual verbs only)   Overlays (help, settings, kill confirm, process detail)
 ```
 
@@ -72,13 +72,15 @@ Expanded geometry lives in `widgets/grid.rs`. Nothing draws raw borders outside 
 - `plan(area, surface, flags) -> LayoutPlan` is pure geometry; widgets never self-measure.
 - **Work gate:** 60 cols × 16 rows (24 proc + 36 metrics); below it, Glance — never squeeze.
 - **Process share:** default 55%, clamp 35..72 (`PROC_RATIO_*` in core), drag-resizable.
-- **Degrade ladder:** `Full → Tight → Minimal` from left-rail width × body height.
-  Hide order: spec lines follow Degrade; graphs follow **panel inner height**
-  (≥5 tall braille, 2–4 spark, 1 headline). Expanded views reflow via `grid::pack`
-  plus `split_meta`. Wide expand (`inner.width ≥ 100`) parks hops, identity, and
-  per-core `%` in a **26-col left column**; graphs keep the remaining full height.
-  Narrow expand uses a bottom strip. Leftover is shared across `take_leftover`
-  bands so usage and heat both grow; unused leftover always fills the pane.
+- **Degrade ladder:** `Full → Tight → Minimal` is still computed on the Work left
+  rail and Glance body, but compact widgets no longer hide graphs or drop spec
+  lines from it — numbers live in titles, bodies are graphs whenever inner
+  height ≥ 2. Expanded views reflow via `grid::pack` plus `split_meta`. Wide
+  expand (`inner.width ≥ 100`) parks hops, identity, and per-core `%` in a
+  **26-col left column** (hops eat leftover column height); graphs keep the
+  remaining full height. Narrow expand uses a bottom strip. Leftover is shared
+  across `take_leftover` bands so usage and heat both grow; when heat is
+  absent the usage band fills the pane.
   Expanded cells are not required to be odd height.
 - **Slack policy:** leftover vertical space goes to the current hero (Work: cpu/gpu row;
   Glance: the cpu panel unions the fill row directly beneath it).
@@ -129,7 +131,7 @@ a non-goal until someone ships us a screenshot that needs it.
 
 - Hero numbers: `title` color + BOLD modifier, one per view max.
 - Titles: `dim` label + `title` values.
-- Sublines/specs: all `dim`.
+- Identity in the expand meta column: all `dim`.
 - Data accents: one color family per panel (cpu mint, gpu mint, mem/disk/fan gold, net lavender,
   temp blue), brightened for translucent backgrounds.
 
@@ -162,9 +164,11 @@ series gold, Serious/Critical red. Selection highlight is the one permitted back
 - **Draw cadence:** the event loop redraws once per interval tick or on input; ratatui diffs
   against the previous buffer so quiet frames cost ~nothing. Cheap collectors default to 250 ms;
   processes 1 s; HID/SMC 2 s. No tweening.
-- **History:** cheap series are 3600-sample rings (~15 min at 250 ms). Draw path uses
-  `downsample_shaped`: right half last-value, left half peak. Temps/fans stay 900 at the sensor
-  clock. Bottom-fill braille with a small-value bias so 2% still lights a dot.
+- **History:** every series covers the same **15-minute** window (`HISTORY_WINDOW`).
+  Ring length is `capacity_for(period)` so a 250 ms cheap clock is 3600 samples and
+  the 2 s sensor clock is 450; cycling `[` `]` resizes the cheap rings and the
+  window does not move. Draw path uses `downsample_shaped`: right half last-value,
+  left half peak. Bottom-fill braille with a small-value bias so 2% still lights a dot.
 - **Verification:** every layout change gets eyeballed through the ignored
   `visual_dump::dump_all_expanded` test (ASCII frames of every expanded panel), plus pty runs at
   boundary sizes (61×16, 60×24) checking boot/render/quit and a size-sweep test that replans and
@@ -224,21 +228,9 @@ fn cell(frame: &mut Frame, area: Rect, title: &str, theme: &Theme) -> Rect {
 }
 ```
 
-Geometry degrades before content does:
-
-```rust
-impl Degrade {
-    fn for_left_rail(width: u16, height: u16) -> Self {
-        if width < 50 || height < 17 {
-            Self::Minimal
-        } else if width < 64 || height < 22 {
-            Self::Tight
-        } else {
-            Self::Full
-        }
-    }
-}
-```
+Geometry degrades before content does: `layout::plan` still computes `Degrade`
+from rail size, but compact paint no longer consults it. Inner height decides
+graph vs spark vs headline.
 
 ## 10. Checklist status
 

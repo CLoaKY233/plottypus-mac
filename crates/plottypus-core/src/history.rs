@@ -1,6 +1,15 @@
 use std::collections::VecDeque;
+use std::time::Duration;
 
-const DEFAULT_CAPACITY: usize = 900;
+use crate::config::{HISTORY_WINDOW, INTERVAL_DEFAULT, SENSOR_PERIOD};
+
+/// Samples that fit `HISTORY_WINDOW` at `period`. Never zero.
+#[must_use]
+pub fn capacity_for(period: Duration) -> usize {
+    let window = HISTORY_WINDOW.as_millis();
+    let period = period.as_millis().max(1);
+    usize::try_from(window.div_ceil(period)).unwrap_or(1).max(1)
+}
 
 /// How a history is mapped onto 0..=1 for drawing.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -128,7 +137,7 @@ pub struct History {
 
 impl Default for History {
     fn default() -> Self {
-        Self::with_capacity(DEFAULT_CAPACITY)
+        Self::for_period(SENSOR_PERIOD)
     }
 }
 
@@ -224,8 +233,21 @@ impl History {
     pub const CHEAP_CAPACITY: usize = 3600;
 
     #[must_use]
+    pub fn for_period(period: Duration) -> Self {
+        Self::with_capacity(capacity_for(period))
+    }
+
+    #[must_use]
     pub fn cheap() -> Self {
-        Self::with_capacity(Self::CHEAP_CAPACITY)
+        Self::for_period(INTERVAL_DEFAULT)
+    }
+
+    pub fn set_capacity(&mut self, capacity: usize) {
+        let capacity = capacity.max(1);
+        while self.samples.len() > capacity {
+            self.samples.pop_front();
+        }
+        self.capacity = capacity;
     }
 
     #[must_use]
@@ -426,5 +448,34 @@ mod tests {
         assert_eq!(h.len(), 3600);
         assert!((h.last().unwrap_or(0.0) - 3600.0).abs() < f32::EPSILON);
         assert!((h.iter().next().unwrap_or(0.0) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn capacities_share_the_history_window() {
+        use crate::config::{HISTORY_WINDOW, INTERVAL_DEFAULT, INTERVAL_MID, SENSOR_PERIOD};
+
+        assert_eq!(capacity_for(INTERVAL_DEFAULT), 3600);
+        assert_eq!(capacity_for(INTERVAL_MID), 1800);
+        assert_eq!(capacity_for(SENSOR_PERIOD), 450);
+        assert_eq!(
+            u128::from(capacity_for(INTERVAL_DEFAULT) as u32) * INTERVAL_DEFAULT.as_millis(),
+            HISTORY_WINDOW.as_millis()
+        );
+        assert_eq!(
+            u128::from(capacity_for(SENSOR_PERIOD) as u32) * SENSOR_PERIOD.as_millis(),
+            HISTORY_WINDOW.as_millis()
+        );
+    }
+
+    #[test]
+    fn set_capacity_keeps_the_newest_samples() {
+        let mut h = History::with_capacity(4);
+        for v in [1.0, 2.0, 3.0, 4.0] {
+            h.push(v);
+        }
+        h.set_capacity(2);
+        assert_eq!(h.len(), 2);
+        assert!((h.iter().next().unwrap_or(0.0) - 3.0).abs() < f32::EPSILON);
+        assert!((h.last().unwrap_or(0.0) - 4.0).abs() < f32::EPSILON);
     }
 }
