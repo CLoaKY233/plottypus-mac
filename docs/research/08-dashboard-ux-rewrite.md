@@ -11,6 +11,9 @@
 
 This is the product + engineering plan for the next UX pass. It is opinionated on purpose. The user asked us to decide what they actually want, what is required, and what we will not do.
 
+**Shipped** at `cc23f36`. The follow-up critique and next plan is
+[`09-one-fact-one-home.md`](09-one-fact-one-home.md).
+
 ---
 
 ## Overview

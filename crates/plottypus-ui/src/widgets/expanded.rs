@@ -1368,19 +1368,6 @@ fn paint_fan(
             },
         );
     }
-    if inner.height > 0 {
-        render_fill_bar(
-            frame,
-            Rect {
-                x: inner.x,
-                y: inner.y.saturating_add(inner.height.saturating_sub(1)),
-                width: inner.width,
-                height: 1,
-            },
-            fan.ratio(),
-            theme.fan,
-        );
-    }
 }
 
 fn paint_volumes(frame: &mut Frame, area: Rect, view: &AppView<'_>, theme: &Theme) {

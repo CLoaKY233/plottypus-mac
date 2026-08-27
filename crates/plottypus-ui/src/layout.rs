@@ -31,7 +31,7 @@ impl Panel {
             Self::Mem => "mem",
             Self::Net => "net",
             Self::Disk => "disk",
-            Self::Fans => "fans",
+            Self::Fans => "sens",
             Self::Processes => "proc",
         }
     }
